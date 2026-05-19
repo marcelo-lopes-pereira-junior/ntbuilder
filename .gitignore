@@ -1,0 +1,55 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+.venv_*/
+venv/
+env/
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ── Tests & coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── NTBuilder outputs (user-generated structure files) ───────────────────────
+output/
+results/
+teste/
+NT_n*_m*.pdb
+
+# ── Web runtime ──────────────────────────────────────────────────────────────
+web/tmp/
+web/stats.jsonl
+
+# ── Local development logs / scratch ─────────────────────────────────────────
+_diary/
+pytest_log.txt
+debug*.txt
+*.log
+
+# ── Paper source (kept locally, not published in this repo) ──────────────────
+NTBuilder_paper/
+assets/bkp_*/
+
+# ── Extra example structures (local only, not distributed) ───────────────────
+examples/extra/

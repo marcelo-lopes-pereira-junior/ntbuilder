@@ -1,0 +1,34 @@
+[Unit]
+Description=NTBuilder Web API (FastAPI + uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/ntbuilder/web
+
+# Activate the virtual environment before starting
+Environment="PATH=/opt/ntbuilder/venv/bin:/usr/local/bin:/usr/bin"
+ExecStart=/opt/ntbuilder/venv/bin/uvicorn api.main:app \
+    --host 127.0.0.1 \
+    --port 8765 \
+    --workers 2 \
+    --log-level info
+
+Restart=on-failure
+RestartSec=5
+
+# Temp files & logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ntbuilder-web
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ntbuilder/web/tmp /opt/ntbuilder/web/data
+
+[Install]
+WantedBy=multi-user.target

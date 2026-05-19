@@ -1,0 +1,13 @@
+# Temporary job files (server-side, never commit)
+tmp/
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Logs
+*.log

@@ -1,0 +1,18 @@
+# Core — required
+numpy>=1.24
+scipy>=1.10
+
+# GUI — required for the desktop interface
+PyQt6>=6.5
+pyqtgraph>=0.13
+PyOpenGL>=3.1
+
+# CIF support — optional but recommended
+gemmi>=0.6
+
+# Visualization (3D viewer fallback / notebook use)
+matplotlib>=3.7
+
+# Development / tests
+pytest>=7.4
+

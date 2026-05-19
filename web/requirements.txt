@@ -1,0 +1,12 @@
+# NTBuilder Web — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# Web framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9    # required for UploadFile
+
+# Core deps (same as desktop app)
+numpy>=1.24.0
+gemmi>=0.6.4               # CIF reader
+scipy>=1.11.0              # optional but recommended — enables spurious-bond detection

@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NTBuilder — Nanotube Generator | NanoEng (UnB)</title>
+  <meta name="description"
+        content="Build nanotubes from any 2D crystal structure. Interactive chirality map, 3D preview, multi-wall and bundle assembly, axial/torsional deformations, structural analysis, ready-to-paste Methods text, and DFT inputs for VASP, QE, CP2K and SIESTA." />
+  <meta name="theme-color" content="#0A2540" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" />
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.0.4/3Dmol-min.js"></script>
+
+  <link rel="stylesheet" href="static/style.css" />
+</head>
+<body>
+
+<!-- ─── Site header ───────────────────────────────────────────────────────── -->
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="brand" href="/" aria-label="NTBuilder home">
+      <img class="brand__logo" src="static/ntbuilder.png" alt="" />
+      <div class="brand__title">
+        <span class="brand__name">NTBuilder</span>
+        <span class="brand__sub">NanoEng · UnB</span>
+      </div>
+    </a>
+    <nav class="nav" aria-label="Group navigation">
+      <a href="https://nanoeng.unb.br/" target="_blank" rel="noopener" data-i18n="nav.nanoeng">NanoEng</a>
+    </nav>
+    <div class="site-header__spacer"></div>
+    <div class="site-header__tools">
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" data-lang="pt" aria-pressed="true">PT</button>
+        <button type="button" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+      <button class="btn-icon" id="theme-toggle-btn" data-i18n-title="header.theme" title="Alternar tema claro/escuro">☀</button>
+      <img class="brand__unb" src="static/unb.png" alt="UnB" />
+    </div>
+  </div>
+</header>
+
+<!-- ─── Main shell ────────────────────────────────────────────────────────── -->
+<main id="main">
+
+  <!-- ── Column 1: Steps 1–3 ──────────────────────────────────────────── -->
+  <aside id="sidebar">
+
+    <!-- Etapa 1 — Estrutura -->
+    <div>
+      <div class="step-label" data-i18n="step1.title">Etapa 1 — Estrutura</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <label data-i18n="step1.example">Usar exemplo disponível</label>
+          <div id="example-row">
+            <select id="example-select"><option value="" data-i18n="step1.example.placeholder">— selecionar —</option></select>
+            <button class="btn-icon" id="example-load-btn" data-i18n="step1.load">Carregar</button>
+          </div>
+        </div>
+        <div style="text-align:center;font-size:.72rem;color:var(--c-muted);" data-i18n="step1.or">
+          — ou envie seu próprio arquivo de estrutura —
+        </div>
+        <div id="drop-zone">
+          <input type="file" id="cif-file-input"
+                 accept=".cif,.pdb,.xyz,.poscar,.contcar,.vasp,.xsf,.lammps,.data,.in,.pwi" />
+          <div class="drop-icon">📂</div>
+          <div class="drop-text" data-i18n-html="step1.drop.text"><strong>Clique ou arraste</strong> um arquivo</div>
+          <div class="drop-hint" data-i18n="step1.drop.hint">CIF · PDB · XYZ · POSCAR · XSF · LAMMPS · QE</div>
+        </div>
+        <div id="cif-status"></div>
+
+        <!-- Estrutura / simetria -->
+        <div id="struct-info" class="hidden struct-info-grid">
+          <span class="si-label" data-i18n="step1.info.lattice">Rede</span>      <span class="si-val" id="si-lattice">—</span>
+          <span class="si-label">a / b</span>      <span class="si-val" id="si-ab">—</span>
+          <span class="si-label">γ</span>          <span class="si-val" id="si-gamma">—</span>
+          <span class="si-label" data-i18n="step1.info.species">Espécies</span>   <span class="si-val" id="si-species">—</span>
+          <span class="si-label">d<sub>min</sub></span><span class="si-val" id="si-dmin">—</span>
+          <span class="si-label" data-i18n="step1.info.thetaSector">setor θ</span>    <span class="si-val" id="si-theta">—</span>
+        </div>
+
+        <!-- Célula primitiva -->
+        <button class="btn-tonal" id="btn-prim" disabled style="width:100%;font-size:.82rem;" data-i18n="step1.primitive">
+          🔬 Encontrar célula primitiva
+        </button>
+        <div id="prim-result" class="hidden modal-note" style="font-size:.74rem;"></div>
+
+        <button class="btn-ghost" id="btn-cutoffs" style="width:100%;font-size:.78rem;" data-i18n="step1.cutoffs">
+          ⚙ Cutoffs de ligação…
+        </button>
+      </div>
+    </div>
+
+    <!-- Etapa 2 — Quiralidade -->
+    <div>
+      <div class="step-label" data-i18n="step2.title">Etapa 2 — Quiralidade</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:8px;">
+        <label data-i18n="step2.indices">Índices quirais — clique no mapa ou digite abaixo</label>
+        <div class="nm-inputs">
+          <div style="flex:1;">
+            <label style="text-align:center">n</label>
+            <input type="number" id="inp-n" min="0" max="60" value="5" />
+          </div>
+          <div style="flex:1;">
+            <label style="text-align:center">m</label>
+            <input type="number" id="inp-m" min="0" max="60" value="5" />
+          </div>
+        </div>
+        <div id="chiral-props" class="hidden">
+          <span class="prop-label" data-i18n="step2.diameter">Diâmetro</span><span class="prop-val" id="cp-d">—</span>
+          <span class="prop-label" data-i18n="step2.theta">θ (quiral)</span><span class="prop-val" id="cp-theta">—</span>
+          <span class="prop-label" data-i18n="step2.cellAtoms">Átomos/cel.</span><span class="prop-val" id="cp-atoms">—</span>
+          <span class="prop-label" data-i18n="step2.strain">Strain</span><span class="prop-val" id="cp-strain">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Etapa 3 — Parâmetros -->
+    <div>
+      <div class="step-label" data-i18n="step3.title">Etapa 3 — Parâmetros</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:10px;">
+        <div class="field-row" id="reps-row">
+          <div>
+            <label data-i18n="step3.reps">Repetições axiais</label>
+            <input type="number" id="inp-repeat" min="1" max="999" value="1" />
+          </div>
+          <div>
+            <label data-i18n="step3.vacuum">Vácuo (Å)</label>
+            <input type="number" id="inp-vacuum" min="1" max="50" step="0.5" value="10" />
+          </div>
+        </div>
+        <div id="reps-info" class="hidden"></div>
+        <div class="toggle-row" id="rollin-row" style="display:none;">
+          <span data-i18n="step3.rollin" data-i18n-title="rollin.help"
+                title="Inverte qual face do plano 2D fica voltada para dentro do tubo. Relevante apenas para redes heteronucleares (h-BN, MoS₂, MoSSe…).">Roll inward</span>
+          <label class="toggle">
+            <input type="checkbox" id="inp-rollin" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="divider"></div>
+        <button class="btn-primary" id="build-btn" disabled data-i18n="step3.build">Construir nanotubo</button>
+        <div class="history-row">
+          <button class="btn-tonal" id="undo-btn" disabled
+                  data-i18n="step3.undo" data-i18n-title="step3.undo.title"
+                  title="Desfazer última operação (Ctrl+Z)">↶ Desfazer</button>
+          <button class="btn-tonal" id="redo-btn" disabled
+                  data-i18n="step3.redo" data-i18n-title="step3.redo.title"
+                  title="Refazer (Ctrl+Y)">↷ Refazer</button>
+        </div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── Column 2: Step 4 results + Polar map ─────────────────────────── -->
+  <section id="polar-section">
+
+    <!-- Etapa 4 — Resultados -->
+    <div id="step4-area">
+      <div class="step-label" style="padding-bottom:4px;" data-i18n-html="step4.title">Etapa 4 — Resultados &amp; ferramentas</div>
+
+      <div id="summary-grid">
+        <span class="sg-label" data-i18n="step4.chirality">Quiralidade</span><span class="sg-val" id="sg-nm">—</span>
+        <span class="sg-label" data-i18n="step4.atoms">Átomos</span>    <span class="sg-val" id="sg-nat">—</span>
+        <span class="sg-label" data-i18n="step4.diameter">Diâmetro</span>  <span class="sg-val" id="sg-d">—</span>
+        <span class="sg-label" data-i18n="step4.length">Comprimento</span><span class="sg-val" id="sg-l">—</span>
+        <span class="sg-label" data-i18n="step4.strain">Strain</span>    <span class="sg-val" id="sg-strain">—</span>
+        <span class="sg-label" data-i18n="step4.theta">θ quiral</span>  <span class="sg-val" id="sg-theta">—</span>
+      </div>
+
+      <div id="wall-plan" class="hidden"></div>
+
+      <div id="warning-box"></div>
+
+      <!-- Transformações avançadas -->
+      <div class="panel-title" style="margin-top:12px;">
+        <span class="dot"></span> <span data-i18n="step4.transforms">Transformações avançadas</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn-tonal" id="mwnt-open-btn"   disabled data-i18n="step4.mwnt">⧉ Multicamada…</button>
+        <button class="btn-tonal" id="deform-open-btn" disabled data-i18n="step4.deform">↔ Deformação…</button>
+        <button class="btn-tonal" id="bundle-open-btn" disabled data-i18n="step4.bundle">⬡ Feixe…</button>
+      </div>
+
+      <!-- Análise -->
+      <div class="panel-title" style="margin-top:12px;">
+        <span class="dot"></span> <span data-i18n-html="step4.analysis">Análise &amp; relatórios</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn-tonal" id="analysis-open-btn" disabled data-i18n="step4.analysisBtn">📈 Análise estrutural…</button>
+        <button class="btn-tonal" id="methods-open-btn"  disabled data-i18n="step4.methodsBtn">📝 Texto de Methods…</button>
+        <button class="btn-tonal" id="dft-open-btn"      disabled data-i18n="step4.dftBtn">⚛ Inputs DFT…</button>
+      </div>
+
+      <!-- Exportação -->
+      <div class="panel-title" style="margin-top:12px;">
+        <span class="dot"></span> <span data-i18n="step4.export">Exportação</span>
+      </div>
+      <div class="btn-row btn-row-2">
+        <button class="btn-tonal" id="download-open-btn" disabled data-i18n="step4.download">⬇ Baixar estrutura…</button>
+        <button class="btn-tonal" id="batch-open-btn"    disabled data-i18n="step4.batch">⊞ Lote (.zip)…</button>
+      </div>
+
+      <!-- Manter os 9 botões originais escondidos: o modal usa-os via click() -->
+      <div id="download-buttons" class="hidden">
+        <button class="dl-btn" data-fmt="xyz"    disabled>XYZ</button>
+        <button class="dl-btn" data-fmt="pdb"    disabled>PDB</button>
+        <button class="dl-btn" data-fmt="lammps" disabled>LAMMPS</button>
+        <button class="dl-btn" data-fmt="poscar" disabled>POSCAR</button>
+        <button class="dl-btn" data-fmt="qe"     disabled>QE (.pwi)</button>
+        <button class="dl-btn" data-fmt="xsf"    disabled>XSF</button>
+        <button class="dl-btn" data-fmt="cp2k"   disabled>CP2K</button>
+        <button class="dl-btn" data-fmt="siesta" disabled>SIESTA</button>
+        <button class="dl-btn" data-fmt="cif"    disabled>CIF</button>
+      </div>
+    </div>
+
+    <!-- Polar map -->
+    <div id="map-panel">
+      <div class="map-header">
+        <div class="map-title-line">
+          <span class="dot"></span>
+          <span data-i18n="map.title">Mapa de quiralidade</span>
+          <span class="mc-sep">—</span>
+          <span style="font-weight:400;text-transform:none;letter-spacing:0;" data-i18n="map.hint">clique para escolher (n,m)</span>
+          <span style="flex:1;"></span>
+          <span id="polar-info" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--c-muted);"></span>
+          <button class="btn-icon" id="polar-refresh-btn" data-i18n-title="map.refresh" title="Recalcular mapa" style="padding:2px 8px;">↻</button>
+        </div>
+        <div class="map-controls">
+          <span class="mc-label">D:</span>
+          <input type="number" id="inp-dmin" value="5"  min="0" max="100" step="1" data-i18n-title="map.dmin" title="Diâmetro mín. (Å)" />
+          <span class="mc-label">–</span>
+          <input type="number" id="inp-dmax" value="30" min="5" max="100" step="1" data-i18n-title="map.dmax" title="Diâmetro máx. (Å)" />
+          <span class="mc-label">Å</span>
+          <span class="mc-sep-v"></span>
+          <label class="mc-label" style="display:flex;align-items:center;gap:5px;cursor:pointer;">
+            <input type="checkbox" id="strain-filter-chk" style="margin:0;width:auto;" />
+            Strain ≤
+          </label>
+          <input type="number" id="inp-strain-max" value="5" min="0" max="100" step="0.5"
+                 data-i18n-title="map.strainMax" title="Strain máx. (%)" style="width:44px;" disabled />
+          <span class="mc-label">%</span>
+          <span class="mc-sep-v"></span>
+          <span class="mc-label" data-i18n="map.color">Cor:</span>
+          <div class="segmented" id="color-seg" role="tablist">
+            <button type="button" class="active" data-color="strain">Strain</button>
+            <button type="button" data-color="n_atoms" data-i18n="map.atoms">Átomos</button>
+          </div>
+        </div>
+      </div>
+      <div id="polar-plot">
+        <div id="polar-empty">
+          <img src="static/ntbuilder_complete.png" alt="NTBuilder" class="polar-logo" />
+          <span data-i18n="map.empty">Carregue uma estrutura para gerar o mapa de quiralidade</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Column 3: 3D viewer ──────────────────────────────────────────── -->
+  <section id="viewer-section">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--c-emerald);"></span>
+      <span data-i18n="viewer.title">Visualizador 3D</span>
+      <span style="flex:1;"></span>
+      <div id="viewer-controls" class="hidden">
+        <button class="btn-icon" id="view-reset-btn" data-i18n-title="viewer.reset" title="Reposicionar câmera">⟳</button>
+        <button class="btn-icon" id="view-style-btn" data-i18n="viewer.style" data-i18n-title="viewer.style.title" title="Alternar estilo">◉ Estilo</button>
+        <button class="btn-icon" id="view-bg-btn"    data-i18n="viewer.bg"    data-i18n-title="viewer.bg.title"    title="Alternar fundo">◑ Fundo</button>
+        <button class="btn-icon" id="view-box-btn"   data-i18n="viewer.box"   data-i18n-title="viewer.box.title"   title="Alternar caixa de simulação">□ Caixa</button>
+        <input  type="number" id="view-rep-z" min="1" max="100" value="1"
+                data-i18n-title="viewer.repz.title" title="Replicar ao longo de z (apenas visual)" />
+        <span class="mc-label">×z</span>
+      </div>
+    </div>
+    <div id="viewer-wrap">
+      <div id="viewer-3d"></div>
+      <div id="viewer-empty">
+        <div class="big-icon">⬡</div>
+        <span data-i18n="viewer.empty">Construa um nanotubo para visualizá-lo aqui</span>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ─── Footer ────────────────────────────────────────────────────────────── -->
+<footer class="site-footer">
+  <span class="site-footer__badge">NTBuilder v1.1.0</span>
+  <span class="sep">|</span>
+  <span data-i18n="footer.affil">Universidade de Brasília — Laboratório de NanoEngenharia</span>
+  <span class="sep">|</span>
+  <a href="https://nanoeng.unb.br" target="_blank" rel="noopener">nanoeng.unb.br</a>
+  <span class="site-footer__spacer"></span>
+  <span data-i18n="footer.cite">Se você usa o NTBuilder, por favor cite nosso paper.</span>
+  <span class="sep">|</span>
+  <a href="https://github.com/marcelo-lopes-pereira-junior/ntbuilder"
+     target="_blank" rel="noopener" data-i18n="footer.github">⬇ Versão local (GitHub)</a>
+</footer>
+
+<div id="toast-container"></div>
+
+<!-- ─── Modals ─────────────────────────────────────────────────────────────── -->
+
+<!-- Confirmação genérica -->
+<div id="confirm-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2 id="confirm-title" data-i18n="confirm.title">Confirmar</h2>
+    <p id="confirm-text"></p>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="confirm-no" data-i18n="confirm.cancel">Cancelar</button>
+      <button class="btn-primary"   id="confirm-yes" style="width:auto;padding:9px 22px;" data-i18n="confirm.continue">Continuar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lote -->
+<div id="batch-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2 data-i18n="batch.title">⊞ Construção em lote</h2>
+    <p data-i18n="batch.desc">Constrói vários nanotubos de uma vez e devolve um arquivo ZIP.</p>
+    <div>
+      <label data-i18n="batch.series">Tipo de série</label>
+      <div class="radio-group">
+        <label><input type="radio" name="batch-type" value="armchair" checked /> <span data-i18n="batch.armchair">Armchair (n, n)</span></label>
+        <label><input type="radio" name="batch-type" value="zigzag" /> <span data-i18n="batch.zigzag">Zigzag (n, 0)</span></label>
+        <label><input type="radio" name="batch-type" value="all" /> <span data-i18n="batch.all">Todos os pontos do mapa atual</span></label>
+      </div>
+    </div>
+    <div id="batch-range-row" class="field-row">
+      <div><label data-i18n="batch.nFrom">n de</label><input type="number" id="batch-n-from" min="1" max="60" value="5" /></div>
+      <div><label data-i18n="batch.nTo">n até</label>  <input type="number" id="batch-n-to"   min="1" max="60" value="20" /></div>
+    </div>
+    <div class="field-row">
+      <div><label data-i18n="step3.vacuum">Vácuo (Å)</label>          <input type="number" id="batch-vacuum" value="10" min="1" max="50" step="0.5" /></div>
+      <div><label data-i18n="step3.reps">Repetições axiais</label>    <input type="number" id="batch-repeat" value="1"  min="1" max="999" /></div>
+    </div>
+    <div class="toggle-row" id="batch-rollin-row" style="display:none;">
+      <span data-i18n="step3.rollin">Roll inward</span>
+      <label class="toggle"><input type="checkbox" id="batch-rollin" /><span class="slider"></span></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="batch-cancel-btn" data-i18n="confirm.cancel">Cancelar</button>
+      <button class="btn-primary"   id="batch-build-btn" style="width:auto;padding:9px 22px;" data-i18n-html="batch.go">Construir &amp; baixar ZIP</button>
+    </div>
+  </div>
+</div>
+
+<!-- Multicamada (MWNT) -->
+<div id="mwnt-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2 data-i18n="mwnt.title">⧉ Nanotubo multicamada</h2>
+    <p data-i18n="mwnt.desc">Constrói um nanotubo multi-parede escalonando o atual (n, m) por inteiros, de modo que todas as paredes compartilhem o mesmo período axial. Por design, esta operação reinicia a partir do (n, m) e ignora deformações já aplicadas.</p>
+    <div class="field-row">
+      <div><label data-i18n="mwnt.walls">Número de paredes</label>
+        <input type="number" id="mwnt-walls" min="1" max="10" value="3" /></div>
+      <div><label data-i18n="mwnt.spacing">Espaçamento interlamelar (Å)</label>
+        <input type="number" id="mwnt-spacing" step="0.1" min="1" max="10" value="3.4" /></div>
+    </div>
+    <div class="field-row">
+      <div><label data-i18n="step3.vacuum">Vácuo (Å)</label>
+        <input type="number" id="mwnt-vacuum" step="0.5" min="1" max="50" value="10" /></div>
+      <div id="mwnt-rollin-cell">
+        <label data-i18n="step3.rollin">Roll inward</label>
+        <div class="toggle-row" style="padding-top:6px;">
+          <span style="font-size:.78rem;color:var(--c-muted);" data-i18n="mwnt.rollin.hint">inverte face interna/externa</span>
+          <label class="toggle"><input type="checkbox" id="mwnt-rollin" /><span class="slider"></span></label>
+        </div>
+      </div>
+    </div>
+    <div id="mwnt-plan-modal" class="modal-note hidden" style="font-family:var(--ff-mono);font-size:.78rem;"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="mwnt-cancel-btn" data-i18n="confirm.cancel">Cancelar</button>
+      <button class="btn-primary"   id="mwnt-build-btn" style="width:auto;padding:9px 22px;" data-i18n="mwnt.go">Construir MWNT</button>
+    </div>
+  </div>
+</div>
+
+<!-- Feixe -->
+<div id="bundle-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2 data-i18n="bundle.title">⬡ Feixe de nanotubos</h2>
+    <p data-i18n="bundle.desc">Replica o nanotubo atual em uma rede 2D formando uma supercélula periódica em bundle. Funciona sobre qualquer estrutura previamente construída (SWNT, MWNT ou deformada).</p>
+    <div class="field-row">
+      <div><label data-i18n="bundle.geom">Geometria</label>
+        <select id="bundle-geometry">
+          <option value="linear"     data-i18n="bundle.linear">Linear (2 tubos)</option>
+          <option value="triangle"   data-i18n="bundle.triangle">Triângulo (3 tubos)</option>
+          <option value="square4"    data-i18n="bundle.square4">Quadrado 2×2 (4 tubos)</option>
+          <option value="hexagonal7" selected data-i18n="bundle.hex7">Hexagonal 1+6 (7 tubos)</option>
+          <option value="grid"       data-i18n="bundle.grid">Grade customizada (N × M)</option>
+        </select></div>
+      <div><label data-i18n="bundle.intertube">Espaçamento entre tubos (Å)</label>
+        <input type="number" id="bundle-spacing" step="0.1" min="0.5" max="30" value="3.4" /></div>
+    </div>
+    <div class="field-row">
+      <div><label data-i18n="bundle.outerVac">Vácuo externo (Å)</label>
+        <input type="number" id="bundle-vacuum" step="0.5" min="0" max="50" value="10" /></div>
+      <div><label data-i18n="step3.reps">Repetições axiais</label>
+        <input type="number" id="bundle-repeat" min="1" max="999" value="1" /></div>
+    </div>
+    <div class="field-row" id="bundle-grid-row" style="display:none;">
+      <div><label data-i18n-html="bundle.gridX">Grade n<sub>x</sub></label>
+        <input type="number" id="bundle-nx" min="1" max="10" value="2" /></div>
+      <div><label data-i18n-html="bundle.gridY">Grade n<sub>y</sub></label>
+        <input type="number" id="bundle-ny" min="1" max="10" value="2" /></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="bundle-cancel-btn" data-i18n="confirm.cancel">Cancelar</button>
+      <button class="btn-primary"   id="bundle-build-btn" style="width:auto;padding:9px 22px;" data-i18n="bundle.go">Construir feixe</button>
+    </div>
+  </div>
+</div>
+
+<!-- Deformação / Torção -->
+<div id="deform-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2 data-i18n="deform.title">↔ Deformação / Torção</h2>
+    <p data-i18n="deform.desc">Aplica strain axial, strain radial e/ou torção ao nanotubo atual. A torção quebra a periodicidade axial: o resultado é um segmento finito em Z. A torção será aplicada sobre a supercélula que está sendo visualizada (controle ×z no header do visualizador 3D) — feche este diálogo, ajuste o ×z e reabra se quiser alterar o comprimento.</p>
+    <div class="field-row">
+      <div><label data-i18n="deform.strain">Strain axial (%)</label>
+        <input type="number" id="deform-strain" step="0.5" min="-50" max="200" value="0" /></div>
+      <div><label data-i18n="deform.twist">Taxa de torção (°/Å)</label>
+        <input type="number" id="deform-twist" step="0.05" min="-90" max="90" value="0" /></div>
+    </div>
+    <div class="field-row">
+      <div><label data-i18n="deform.radial">Strain radial (%)</label>
+        <input type="number" id="deform-radial" step="0.5" min="-50" max="100" value="0" /></div>
+      <div><label data-i18n="deform.vacuum">Vácuo (Å)</label>
+        <input type="number" id="deform-vacuum" step="0.5" min="1" max="50" value="10" /></div>
+    </div>
+    <div class="field-row">
+      <div><label data-i18n="deform.zvac">Vácuo em Z (torção, Å)</label>
+        <input type="number" id="deform-zvac" step="0.5" min="0" max="100" value="10" /></div>
+      <div></div>
+    </div>
+    <!-- Campo oculto, sincronizado com view-rep-z ao abrir o modal.
+         Mantido no DOM porque o handler de Aplicar lê deste id, e múltiplos
+         pedaços de i18n / undo / redo dependem dele. -->
+    <input type="hidden" id="deform-repeat" value="1" />
+    <div id="deform-projection" class="modal-note" style="font-family:var(--ff-mono);font-size:.78rem;"></div>
+    <div id="deform-warning" class="modal-note hidden"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="deform-cancel-btn" data-i18n="confirm.cancel">Cancelar</button>
+      <button class="btn-primary"   id="deform-build-btn" style="width:auto;padding:9px 22px;" data-i18n="deform.go">Aplicar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Análise estrutural -->
+<div id="analysis-overlay" class="modal-overlay">
+  <div class="modal-box modal-box--wide">
+    <h2 data-i18n="analysis.title">📈 Análise estrutural</h2>
+    <p data-i18n="analysis.desc">Histograma de comprimentos de ligação, caráter eletrônico por zone-folding (apenas grafeno) e classificação de simetria / grupo de linha do tubo.</p>
+    <div class="field-row">
+      <div><label data-i18n="analysis.cutoff">Cutoff de ligação (Å)</label>
+        <input type="number" id="analysis-cutoff" step="0.05" min="0.5" max="5" value="2.0" /></div>
+      <div style="display:flex;align-items:flex-end;">
+        <button class="btn-tonal" id="analysis-run-btn" style="width:100%;padding:7px;" data-i18n="analysis.run">Executar análise</button>
+      </div>
+    </div>
+    <div id="analysis-summary" class="hidden modal-note"></div>
+    <div id="analysis-plot" style="height:280px;"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="analysis-close-btn" data-i18n="close">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Texto de Methods -->
+<div id="methods-overlay" class="modal-overlay">
+  <div class="modal-box modal-box--wide">
+    <h2 data-i18n="methods.title">📝 Texto de Methods</h2>
+    <p data-i18n="methods.desc">Parágrafo pronto para colar na seção Methods de um paper. A rede, quiralidade, caixa, vácuo, caráter eletrônico (quando aplicável) e qualquer deformação ativa são listados automaticamente.</p>
+    <div class="field-row">
+      <div><label data-i18n="methods.cite">BibTeX cite key</label>
+        <input type="text" id="methods-citekey" value="Pereira2026" /></div>
+      <div style="display:flex;align-items:flex-end;gap:6px;">
+        <button class="btn-tonal"  id="methods-run-btn"  style="flex:1;padding:7px;" data-i18n="methods.gen">Gerar</button>
+        <button class="btn-tonal"  id="methods-copy-btn" disabled
+                style="width:90px;padding:7px;" data-i18n="methods.copy">Copiar</button>
+      </div>
+    </div>
+    <div id="methods-output" class="text-output hidden"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="methods-close-btn" data-i18n="close">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Inputs DFT -->
+<div id="dft-overlay" class="modal-overlay">
+  <div class="modal-box modal-box--wide">
+    <h2 data-i18n="dft.title">⚛ Arquivos de entrada DFT</h2>
+    <p data-i18n="dft.desc">Gera arquivos de entrada com parâmetros sensatos para VASP, Quantum ESPRESSO, CP2K ou SIESTA a partir da estrutura atual. Revise e ajuste os parâmetros antes de lançar produção.</p>
+    <div class="field-row">
+      <div><label data-i18n="dft.code">Código</label>
+        <select id="dft-code">
+          <option value="vasp">VASP — INCAR + KPOINTS + POSCAR</option>
+          <option value="qe">Quantum ESPRESSO — pw.x</option>
+          <option value="cp2k">CP2K — Quickstep</option>
+          <option value="siesta">SIESTA — fdf</option>
+        </select></div>
+      <div style="display:flex;align-items:flex-end;gap:6px;">
+        <button class="btn-tonal" id="dft-run-btn"  style="flex:1;padding:7px;" data-i18n="dft.gen">Gerar</button>
+        <button class="btn-tonal" id="dft-copy-btn" disabled style="width:90px;padding:7px;" data-i18n="dft.copy">Copiar</button>
+      </div>
+    </div>
+    <div id="dft-tabs" class="tab-strip hidden"></div>
+    <div id="dft-output" class="text-output hidden"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="dft-close-btn" data-i18n="close">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Download (escolha de formato) -->
+<div id="download-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2 data-i18n="download.title">⬇ Baixar estrutura</h2>
+    <p data-i18n="download.desc">Escolha um formato. O arquivo é gerado pelo servidor a partir do estado atual da estrutura (incluindo deformações, multi-parede e feixe quando aplicáveis).</p>
+    <div class="dl-grid">
+      <button class="dl-btn" data-modal-fmt="xyz">XYZ</button>
+      <button class="dl-btn" data-modal-fmt="pdb">PDB</button>
+      <button class="dl-btn" data-modal-fmt="lammps">LAMMPS</button>
+      <button class="dl-btn" data-modal-fmt="poscar">POSCAR</button>
+      <button class="dl-btn" data-modal-fmt="qe">QE (.pwi)</button>
+      <button class="dl-btn" data-modal-fmt="xsf">XSF</button>
+      <button class="dl-btn" data-modal-fmt="cp2k">CP2K</button>
+      <button class="dl-btn" data-modal-fmt="siesta">SIESTA</button>
+      <button class="dl-btn" data-modal-fmt="cif">CIF</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="download-close-btn" data-i18n="close">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cutoffs de ligação -->
+<div id="cutoffs-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2 data-i18n="cutoffs.title">⚙ Cutoffs de ligação</h2>
+    <p data-i18n="cutoffs.desc">Sobrescreve os cutoffs padrão por par de espécies usados na detecção de ligações espúrias induzidas por curvatura. Deixe vazio para usar os defaults internos.</p>
+    <div class="cutoffs-list" id="cutoffs-list"></div>
+    <div class="field-row" style="grid-template-columns:1fr 110px auto;">
+      <input type="text" id="cutoff-new-pair" data-i18n-placeholder="cutoffs.pair.placeholder" placeholder="Par (ex.: C-C, B-N)" />
+      <input type="number" id="cutoff-new-val" data-i18n-placeholder="cutoffs.val.placeholder" placeholder="cutoff (Å)" step="0.05" min="0.5" max="5" />
+      <button class="btn-tonal" id="cutoff-add-btn" style="padding:7px 14px;" data-i18n="cutoffs.add">Adicionar</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="cutoffs-close-btn" data-i18n="cutoffs.done">Concluído</button>
+    </div>
+  </div>
+</div>
+
+<script src="static/app.js"></script>
+</body>
+</html>
