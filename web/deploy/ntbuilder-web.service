@@ -10,6 +10,19 @@ WorkingDirectory=/opt/ntbuilder/web
 
 # Activate the virtual environment before starting
 Environment="PATH=/opt/ntbuilder/venv/bin:/usr/local/bin:/usr/bin"
+
+# Cap the BLAS / OpenMP thread pools.  numpy / scipy (OpenBLAS) otherwise
+# spawn one math thread per core (8 here), so a single large build could
+# saturate the whole CPU.  These MUST be set in the environment before
+# Python imports numpy — systemd applies Environment= at exec time, so
+# this is honoured (setting them inside the app after import would not be).
+# 2 threads/worker × 2 workers ≈ 4 cores of numerics, matching CPUQuota.
+Environment="OMP_NUM_THREADS=2"
+Environment="OPENBLAS_NUM_THREADS=2"
+Environment="MKL_NUM_THREADS=2"
+Environment="NUMEXPR_NUM_THREADS=2"
+Environment="VECLIB_MAXIMUM_THREADS=2"
+
 ExecStart=/opt/ntbuilder/venv/bin/uvicorn api.main:app \
     --host 127.0.0.1 \
     --port 8765 \
@@ -18,6 +31,20 @@ ExecStart=/opt/ntbuilder/venv/bin/uvicorn api.main:app \
 
 Restart=on-failure
 RestartSec=5
+
+# ── Resource limits (cgroup) ─────────────────────────────────────────────
+# Hard ceilings so a runaway build can never starve the shared host.
+# Tuned for an 8-core / 15 GiB box; raise if large bundles/batches are slow.
+#   CPUQuota   200% = at most 2 of 8 cores (wall-clock CPU, not core pinning)
+#   CPUWeight   50  = below the default 100, so other workloads win when contended
+#   MemoryHigh 1.5G = soft cap: kernel throttles & reclaims past this
+#   MemoryMax    2G = hard cap: a worker exceeding this is OOM-killed (no swap here)
+#   TasksMax    64  = backstop against a thread/fork runaway
+CPUQuota=200%
+CPUWeight=50
+MemoryHigh=1536M
+MemoryMax=2G
+TasksMax=64
 
 # Temp files & logs
 StandardOutput=journal

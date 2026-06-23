@@ -128,6 +128,32 @@ if any(k in str(_TMP) for k in ("OneDrive", "iCloud", "Dropbox")):
                  "will degrade.  Unset NTBUILDER_TMP or set it to '' to use "
                  "the system temp directory instead.")
 
+
+def _ensure_tmp() -> Path:
+    """Guarantee the scratch directory exists and return it.
+
+    ``_TMP`` is created once at import time, but on a long-running server
+    that defaults to the system temp dir a periodic /tmp cleaner
+    (e.g. systemd-tmpfiles) can delete it after a few days, silently
+    pulling the rug out from under every write.  Each endpoint that
+    persists a job calls this first so a vanished scratch dir is
+    transparently recreated instead of surfacing to the user as an
+    HTTP 500 ("Build failed").
+    """
+    _TMP.mkdir(parents=True, exist_ok=True)
+    return _TMP
+
+
+def _new_job_dir() -> Path:
+    """Create and return a fresh ``_TMP/<uuid>`` job directory.
+
+    Recreates ``_TMP`` first (see :func:`_ensure_tmp`) so the server is
+    self-healing if the scratch dir was cleaned away underneath it.
+    """
+    job_dir = _ensure_tmp() / str(uuid.uuid4())
+    job_dir.mkdir()
+    return job_dir
+
 # ── Accepted upload extensions ────────────────────────────────────────────────
 _ACCEPTED_EXTS = {
     ".cif", ".pdb", ".xyz",
@@ -248,7 +274,7 @@ async def upload_structure(file: UploadFile = File(...)):
     file_id = str(uuid.uuid4())
     # Store with original extension so load_structure can auto-detect format
     save_ext = ext if ext else ""
-    (_TMP / f"{file_id}{save_ext}").write_bytes(data)
+    (_ensure_tmp() / f"{file_id}{save_ext}").write_bytes(data)
     return {"file_id": file_id, "filename": file.filename}
 
 
@@ -403,9 +429,8 @@ async def build(req: BuildRequest):
         pass  # scipy not available — skip check silently
 
     # Save all output formats
-    job_id  = str(uuid.uuid4())
-    job_dir = _TMP / job_id
-    job_dir.mkdir()
+    job_dir = _new_job_dir()
+    job_id  = job_dir.name
     _write_all(job_dir, nt)
 
     # Metadata JSON
@@ -505,7 +530,7 @@ async def primitive(file_id: Optional[str] = None, example: Optional[str] = None
     # Persist the primitive lattice as a new uploaded file so the rest
     # of the workflow can address it.
     new_id   = str(uuid.uuid4())
-    new_path = _TMP / f"{new_id}.xyz"
+    new_path = _ensure_tmp() / f"{new_id}.xyz"
     try:
         _write_lattice_xyz(prim, new_path)
     except Exception as exc:
@@ -592,7 +617,7 @@ async def health():
     performance.  Also reports the existing job count.
     """
     try:
-        n_jobs = sum(1 for _ in _TMP.iterdir() if _.is_dir())
+        n_jobs = sum(1 for _ in _ensure_tmp().iterdir() if _.is_dir())
     except Exception:
         n_jobs = -1
     in_onedrive = "OneDrive" in str(_TMP) or "iCloud" in str(_TMP) \
@@ -704,7 +729,7 @@ async def batch_build(req: BatchRequest):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for n, m, nt in results:
             folder = f"nt_{n}_{m}"
-            tmp = _TMP / str(uuid.uuid4())
+            tmp = _ensure_tmp() / str(uuid.uuid4())
             tmp.mkdir()
             try:
                 for fmt, fname in _BATCH_FMTS:
@@ -771,9 +796,8 @@ async def mwnt(req: MWNTRequest):
     except Exception as exc:
         raise HTTPException(500, f"MWNT build failed: {exc}") from exc
 
-    job_id  = str(uuid.uuid4())
-    job_dir = _TMP / job_id
-    job_dir.mkdir()
+    job_dir = _new_job_dir()
+    job_id  = job_dir.name
     _t = _timer()
     _write_all(job_dir, result.nanotube)
     _t.lap("write")
@@ -845,9 +869,8 @@ async def bundle(req: BundleRequest):
     except Exception as exc:
         raise HTTPException(400, f"Bundle build failed: {exc}") from exc
 
-    job_id  = str(uuid.uuid4())
-    job_dir = _TMP / job_id
-    job_dir.mkdir()
+    job_dir = _new_job_dir()
+    job_id  = job_dir.name
     _t = _timer()
     _write_all(job_dir, result.nanotube)
     _t.lap("write")
@@ -932,9 +955,8 @@ async def deform(req: DeformRequest):
         raise HTTPException(400, f"Deformation failed: {exc}") from exc
     timer.lap("deform")
 
-    job_id  = str(uuid.uuid4())
-    job_dir = _TMP / job_id
-    job_dir.mkdir()
+    job_dir = _new_job_dir()
+    job_id  = job_dir.name
     _write_all(job_dir, nt)
     timer.lap("write")
     _log_stat("deform_build", n=req.n, m=req.m,
@@ -1087,7 +1109,7 @@ async def dft_inputs(req: DFTInputRequest):
         if code == "vasp":
             from core.exporters import write_poscar
             incar, kpoints = generate_vasp_inputs(nt)
-            tmp_dir = _TMP / f"_inp_{uuid.uuid4()}"
+            tmp_dir = _ensure_tmp() / f"_inp_{uuid.uuid4()}"
             tmp_dir.mkdir()
             try:
                 write_poscar(nt, tmp_dir / "POSCAR")
@@ -1106,7 +1128,7 @@ async def dft_inputs(req: DFTInputRequest):
             return {"code": "cp2k", "files": {"nanotube.inp": text}}
 
         if code == "siesta":
-            tmp_dir = _TMP / f"_inp_{uuid.uuid4()}"
+            tmp_dir = _ensure_tmp() / f"_inp_{uuid.uuid4()}"
             tmp_dir.mkdir()
             try:
                 write_siesta(nt, tmp_dir / "nanotube.fdf")
