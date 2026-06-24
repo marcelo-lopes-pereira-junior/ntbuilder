@@ -561,7 +561,25 @@ async function api(method, path, body = null, isFormData = false) {
     let detail = `HTTP ${res.status}`;
     try {
       const data = await res.json();
-      detail = data.detail || JSON.stringify(data);
+      if (typeof data.detail === "string") {
+        detail = data.detail;
+      } else if (Array.isArray(data.detail)) {
+        // FastAPI/Pydantic validation errors arrive as a list of
+        // {loc, msg, type} objects; join the human-readable messages so
+        // the toast shows e.g. "n: Input should be ≤ 100" instead of the
+        // useless "[object Object]".
+        detail = data.detail
+          .map(e => {
+            const field = Array.isArray(e.loc) ? e.loc[e.loc.length - 1] : "";
+            return field ? `${field}: ${e.msg}` : e.msg;
+          })
+          .filter(Boolean)
+          .join("; ") || JSON.stringify(data.detail);
+      } else if (data.detail) {
+        detail = JSON.stringify(data.detail);
+      } else {
+        detail = JSON.stringify(data);
+      }
     } catch (_) { /* ignore */ }
     throw new Error(detail);
   }
@@ -759,7 +777,7 @@ async function runPolar() {
   const rollInward = rollInChk ? rollInChk.checked : false;
   const body = {
     max_diameter: dMax,
-    n_max: 60,
+    n_max: 100,
     roll_inward: rollInward,
     ...(useStrainFilter ? { strain_max: parseFloat($("inp-strain-max").value) || 5 } : {}),
     ...(state.fileId  ? { file_id: state.fileId  } : {}),
