@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 class PolarRequest(BaseModel):
     file_id:      Optional[str]   = None
     example:      Optional[str]   = None
-    n_max:        int             = Field(30, ge=1, le=60)
+    n_max:        int             = Field(30, ge=1, le=100)
     max_diameter: float           = Field(25.0, ge=1.0, le=100.0)
     # Strain filter (applied server-side before returning points)
     strain_max:   Optional[float] = Field(None, ge=0.0, le=100.0)
@@ -24,8 +24,8 @@ class PolarRequest(BaseModel):
 class BuildRequest(BaseModel):
     file_id:     Optional[str]  = None
     example:     Optional[str]  = None
-    n:           int            = Field(..., ge=0, le=60)
-    m:           int            = Field(..., ge=0, le=60)
+    n:           int            = Field(..., ge=0, le=100)
+    m:           int            = Field(..., ge=0, le=100)
     n_repeat:    int            = Field(1, ge=1, le=20)
     vacuum:      float          = Field(10.0, ge=1.0, le=50.0)
     roll_inward: bool           = False
@@ -53,8 +53,8 @@ class MWNTRequest(BaseModel):
     file_id:            Optional[str]  = None
     example:            Optional[str]  = None
     from_job_id:        Optional[str]  = None
-    n:                  int            = Field(..., ge=0, le=60)
-    m:                  int            = Field(..., ge=0, le=60)
+    n:                  int            = Field(..., ge=0, le=100)
+    m:                  int            = Field(..., ge=0, le=100)
     n_walls:            int            = Field(2, ge=1, le=10)
     interlayer_spacing: float          = Field(3.4, ge=1.0, le=10.0)
     vacuum:             float          = Field(10.0, ge=1.0, le=50.0)
@@ -70,8 +70,8 @@ class BundleRequest(BaseModel):
     file_id:      Optional[str] = None
     example:      Optional[str] = None
     from_job_id:  Optional[str] = None
-    n:            int           = Field(..., ge=0, le=60)
-    m:            int           = Field(..., ge=0, le=60)
+    n:            int           = Field(..., ge=0, le=100)
+    m:            int           = Field(..., ge=0, le=100)
     geometry:     str           = Field("hexagonal7",
         description="linear | triangle | square4 | hexagonal7 | grid")
     spacing:      float         = Field(3.4,  ge=0.5, le=30.0)
@@ -90,8 +90,8 @@ class DeformRequest(BaseModel):
     file_id:      Optional[str] = None
     example:      Optional[str] = None
     from_job_id:  Optional[str] = None
-    n:            int           = Field(..., ge=0, le=60)
-    m:            int           = Field(..., ge=0, le=60)
+    n:            int           = Field(..., ge=0, le=100)
+    m:            int           = Field(..., ge=0, le=100)
     axial_strain: float         = Field(0.0,  ge=-0.5, le=2.0,
         description="Fractional axial strain (e.g. 0.05 = 5 %).")
     twist_rate:   float         = Field(0.0,  ge=-90.0, le=90.0,
@@ -108,8 +108,8 @@ class AnalysisRequest(BaseModel):
     file_id:      Optional[str] = None
     example:      Optional[str] = None
     from_job_id:  Optional[str] = None
-    n:            int           = Field(..., ge=0, le=60)
-    m:            int           = Field(..., ge=0, le=60)
+    n:            int           = Field(..., ge=0, le=100)
+    m:            int           = Field(..., ge=0, le=100)
     vacuum:       float         = Field(10.0, ge=1.0, le=50.0)
     bond_cutoff:  float         = Field(2.0,  ge=0.5, le=5.0)
 
@@ -126,8 +126,8 @@ class MethodsRequest(BaseModel):
     file_id:      Optional[str] = None
     example:      Optional[str] = None
     from_job_id:  Optional[str] = None
-    n:            int           = Field(..., ge=0, le=60)
-    m:            int           = Field(..., ge=0, le=60)
+    n:            int           = Field(..., ge=0, le=100)
+    m:            int           = Field(..., ge=0, le=100)
     vacuum:       float         = Field(10.0, ge=1.0, le=50.0)
     deform_desc:  Optional[str] = None
     n_walls:      int           = Field(1,   ge=1, le=10)
@@ -149,8 +149,8 @@ class DFTInputRequest(BaseModel):
     file_id:      Optional[str] = None
     example:      Optional[str] = None
     from_job_id:  Optional[str] = None
-    n:            int           = Field(..., ge=0, le=60)
-    m:            int           = Field(..., ge=0, le=60)
+    n:            int           = Field(..., ge=0, le=100)
+    m:            int           = Field(..., ge=0, le=100)
     vacuum:       float         = Field(10.0, ge=1.0, le=50.0)
     code:         str           = Field("vasp",
         description="vasp | qe | cp2k | siesta")
