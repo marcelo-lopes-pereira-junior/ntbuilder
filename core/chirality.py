@@ -344,6 +344,16 @@ def scan_chirality(
                 theta_test = math.degrees(math.atan2(Ch_test[1], Ch_test[0]))
                 if theta_test > _theta_max + 1e-6 or theta_test < -1e-6:
                     continue
+            # Cheap diameter pre-filter.  |Ch|/π is *exactly* the diameter
+            # that ChiralityResult computes, so discarding out-of-range pairs
+            # here is identical to the ``res.diameter > max_diameter`` check
+            # below — but it skips the expensive T-vector search for the vast
+            # majority of pairs when n_max is large (e.g. the polar map at
+            # n_max=100 scans ~10 k pairs but only a few hundred are ≤ dmax).
+            if n or m:
+                D_cheap = float(np.linalg.norm(n * a1 + m * a2)) / math.pi
+                if D_cheap > max_diameter:
+                    continue
             res = compute_chirality(n, m, structure,
                                     search_limit=search_limit)
             if res is None:

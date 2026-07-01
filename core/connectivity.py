@@ -156,19 +156,31 @@ def compute_bonds(
 
     tree  = cKDTree(coords)
     pairs = tree.query_pairs(max_cut, output_type="ndarray")
+    if len(pairs) == 0:
+        return []
 
+    if settings is None:
+        # Vectorised fast path (no per-pair overrides): compute every
+        # candidate distance and cutoff in one NumPy pass.  A Python loop
+        # over query_pairs is O(pairs) with a per-pair np.linalg.norm and
+        # becomes the dominant cost when the pair count is large — e.g. the
+        # big chiral tubes the polar-map spurious-bond scan builds for a
+        # buckled lattice (MoS₂ …).  Results are identical to the loop.
+        i_idx = pairs[:, 0]
+        j_idx = pairs[:, 1]
+        d  = np.linalg.norm(coords[i_idx] - coords[j_idx], axis=1)
+        hi = (radii[i_idx] + radii[j_idx]) * tolerance
+        mask = (d > min_dist) & (d < hi)
+        return [(int(i), int(j)) for i, j in pairs[mask]]
+
+    # Per-pair override path (user-edited cutoffs): keep the exact per-pair
+    # logic, which cannot be expressed as a single vectorised comparison.
     bonds = []
     for i, j in pairs:
         d   = float(np.linalg.norm(coords[i] - coords[j]))
         si, sj = symbols[i], symbols[j]
-
-        if settings is not None:
-            lo = settings.min_dist_pair(si, sj)
-            hi = settings.max_dist(si, sj)
-        else:
-            lo = min_dist
-            hi = (radii[i] + radii[j]) * tolerance
-
+        lo = settings.min_dist_pair(si, sj)
+        hi = settings.max_dist(si, sj)
         if lo < d < hi:
             bonds.append((int(i), int(j)))
 
