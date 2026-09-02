@@ -897,12 +897,30 @@ def read_cif(path: str | Path) -> LatticeStructure:
         Parses ``_symmetry_equiv_pos_as_xyz`` by regex and evaluates each
         operation with a restricted ``eval``.  Adequate for P1 and simple
         space groups.
+
+    The fallback is used both when gemmi is missing *and* when gemmi refuses
+    the file.  gemmi enforces the CIF grammar strictly, so it rejects inputs
+    that are perfectly usable in practice — most notably files whose first
+    line is a bare ``data_`` with no block name, which several structure
+    databases emit (e.g. the ``posdat_writecif`` files of the Shi et al.
+    sp2-carbon database).  Falling back keeps those files readable.
     """
     path = Path(path)
     try:
         return _read_cif_gemmi(path)
     except ImportError:
         return _read_cif_builtin(path)
+    except Exception as exc_gemmi:
+        try:
+            struct = _read_cif_builtin(path)
+        except Exception as exc_builtin:
+            raise ValueError(
+                f"Could not parse CIF '{path.name}'. "
+                f"gemmi: {exc_gemmi}. Built-in parser: {exc_builtin}"
+            ) from exc_gemmi
+        print(f"[NTBuilder] gemmi rejected {path.name} ({exc_gemmi}); "
+              f"used the built-in CIF parser instead.")
+        return struct
 
 
 def _read_cif_gemmi(path: Path) -> LatticeStructure:

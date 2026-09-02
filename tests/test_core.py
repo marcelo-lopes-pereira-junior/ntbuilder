@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from core.io        import LatticeStructure, read_xyz, read_pdb
+from core.io        import LatticeStructure, read_xyz, read_pdb, read_cif
 from core.chirality import compute_chirality, scan_chirality
 from core.builder   import build_nanotube
 from core.exporters import (
@@ -149,6 +149,53 @@ def nt_5_5():
     s = _graphene()
     ch = compute_chirality(5, 5, s)
     return build_nanotube(s, ch, vacuum=10.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1b. TestCIFFallback
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestCIFFallback:
+    """read_cif must fall back to the built-in parser whenever gemmi refuses
+    a file, not only when gemmi is absent."""
+
+    def test_bare_data_block_header_is_readable(self, tmp_path):
+        """A CIF starting with a nameless ``data_`` block loads anyway.
+
+        gemmi enforces the CIF grammar strictly and rejects such files, but
+        several databases emit them — including the Shi et al. sp2-carbon
+        structures used as case studies.
+        """
+        cif = tmp_path / "bare_header.cif"
+        cif.write_text(
+            "data_\n"
+            "_symmetry_space_group_name_H-M   'P1'\n"
+            "_cell_length_a                   2.460000\n"
+            "_cell_length_b                   2.460000\n"
+            "_cell_length_c                   20.000000\n"
+            "_cell_angle_alpha                90.000000\n"
+            "_cell_angle_beta                 90.000000\n"
+            "_cell_angle_gamma                60.000000\n"
+            "loop_\n"
+            "_atom_site_label\n"
+            "_atom_site_type_symbol\n"
+            "_atom_site_fract_x\n"
+            "_atom_site_fract_y\n"
+            "_atom_site_fract_z\n"
+            "C1 C 0.000000 0.000000 0.500000\n"
+            "C2 C 0.333333 0.333333 0.500000\n"
+        )
+        s = read_cif(cif)
+        assert len(s.atoms) == 2
+        assert s.a == pytest.approx(2.46, abs=1e-3)
+        assert s.gamma_deg == pytest.approx(60.0, abs=1e-2)
+
+    def test_unparsable_file_still_raises(self, tmp_path):
+        """The fallback must not swallow genuinely broken input."""
+        junk = tmp_path / "junk.cif"
+        junk.write_text("this is not a CIF at all\n")
+        with pytest.raises(Exception):
+            read_cif(junk)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
