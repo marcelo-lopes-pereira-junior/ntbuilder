@@ -115,6 +115,24 @@ def _graphene_2x1():
     return LatticeStructure(atoms=atoms, a1=a1_super, a2=a2_super)
 
 
+def _penta_like():
+    """Square cell whose basis breaks the axis-swap mirror.
+
+    Mimics penta-graphene: a = b and γ = 90°, but the buckled atom sits at a
+    fractional position whose mirror image (v, u) is not occupied, so (n,m)
+    and (m,n) are inequivalent.
+    """
+    a = 3.63
+    a1 = np.array([a, 0.0])
+    a2 = np.array([0.0, a])
+    atoms = [
+        {"symbol": "C", "pos": np.array([0.0, 0.0]),           "z":  0.0},
+        {"symbol": "C", "pos": 0.634 * a1 + 0.134 * a2,        "z":  0.687},
+        {"symbol": "C", "pos": 0.366 * a1 + 0.866 * a2,        "z": -0.687},
+    ]
+    return LatticeStructure(a1=a1, a2=a2, atoms=atoms)
+
+
 def _noisy_hexagonal():
     """
     Hexagonal cell with slight numerical noise in both |a| and γ.
@@ -360,6 +378,38 @@ class TestChirality:
         from core.chirality import unique_sector_deg
         s = _oblique()
         assert abs(unique_sector_deg(s) - s.gamma_deg) < 0.01
+
+    def test_swap_invariant_true_for_graphene(self):
+        """Graphene's basis survives the axis-swap mirror, so folding is safe."""
+        from core.chirality import basis_swap_invariant
+        assert basis_swap_invariant(_graphene()) is True
+
+    def test_swap_invariant_false_for_mirror_breaking_basis(self):
+        """A square lattice whose basis breaks the diagonal mirror is not foldable."""
+        from core.chirality import basis_swap_invariant
+        assert basis_swap_invariant(_penta_like()) is False
+
+    def test_map_not_folded_when_basis_breaks_mirror(self):
+        """(n,0) and (0,n) are both kept when the basis is not swap-invariant.
+
+        Penta-graphene motivates this: the lattice is square but the sp3 atoms
+        make (5,0) and (0,5) genuinely inequivalent tubes, so folding the map
+        would hide half of the accessible structures.
+        """
+        res = scan_chirality(_penta_like(), n_max=6, m_max=6,
+                             max_diameter=20.0, unique_only=True)
+        pairs = {(r.n, r.m) for r in res}
+        assert (5, 0) in pairs
+        assert (0, 5) in pairs
+        assert any(m > n for n, m in pairs)
+
+    def test_map_still_folded_for_swap_invariant_lattice(self):
+        """Graphene keeps the folded (unique-sector) map."""
+        res = scan_chirality(_graphene(), n_max=6, m_max=6,
+                             max_diameter=20.0, unique_only=True)
+        pairs = {(r.n, r.m) for r in res}
+        assert (5, 0) in pairs
+        assert (0, 5) not in pairs
 
     def test_hbn_multispecies_chirality(self):
         """compute_chirality works for h-BN (two-species hexagonal lattice)."""

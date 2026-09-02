@@ -278,6 +278,55 @@ def unique_sector_deg(structure: "LatticeStructure") -> float:
     return structure.gamma_deg
 
 
+def basis_swap_invariant(structure: "LatticeStructure", tol: float = 2e-3) -> bool:
+    """
+    Is the atomic basis invariant under exchanging the two lattice axes?
+
+    Folding the map by identifying (n, m) with (m, n) is only legitimate when
+    the *whole crystal* — lattice **and** basis — is symmetric under the mirror
+    that swaps a₁ and a₂.  Equal lattice constants are necessary but not
+    sufficient: the basis can break the mirror even on a perfectly square or
+    hexagonal lattice.
+
+    Penta-graphene is the canonical counter-example.  Its lattice is square
+    (a = b = 3.63 Å, γ = 90°), but the sp³ carbons at z = ±0.687 Å sit at
+    fractional positions such as (0.634, 0.134) whose mirror image (0.134,
+    0.634) is occupied by an atom at the *opposite* height.  The (5,0) and
+    (0,5) nanotubes are therefore genuinely inequivalent structures, and
+    folding the map would hide half of them from the user.
+
+    An atom at fractional (u, v) with out-of-plane offset z must be matched by
+    an atom of the same species at (v, u) with the same z, modulo one lattice
+    translation.
+
+    Returns True when the basis is invariant (folding is safe).
+    """
+    atoms = structure.atoms
+    if len(atoms) < 2:
+        return True
+
+    M = np.array([structure.a1, structure.a2]).T
+    try:
+        fr = np.linalg.solve(M, np.array([a["pos"] for a in atoms]).T).T % 1.0
+    except np.linalg.LinAlgError:      # degenerate cell — do not fold
+        return False
+
+    syms = [a["symbol"] for a in atoms]
+    zs   = [float(a.get("z", 0.0)) for a in atoms]
+
+    for sym, f, z in zip(syms, fr, zs):
+        target = np.array([f[1], f[0]])
+        for sym2, f2, z2 in zip(syms, fr, zs):
+            if sym2 != sym or abs(z2 - z) > 1e-3:
+                continue
+            # compare modulo a lattice translation
+            if np.allclose((f2 - target + 0.5) % 1.0 - 0.5, 0.0, atol=tol):
+                break
+        else:
+            return False
+    return True
+
+
 def scan_chirality(
     structure:    "LatticeStructure",
     n_max:        int = 30,
@@ -317,11 +366,15 @@ def scan_chirality(
     #   γ=60°  hexagonal : armchair at (n,n)  → θ=30° (same n→2n rule)
     #   γ=120° hexagonal : armchair at (2n,n) → θ=30° (m>n gives θ>30°, excluded)
     #   square (γ=90°)   : armchair at (n,n)  → θ=45°
+    # The lattice condition (|a₁| = |a₂|) is necessary but NOT sufficient: the
+    # basis must also survive the axis-swap mirror, otherwise (n,m) and (m,n)
+    # are physically distinct tubes and folding would hide half the map.
+    # See basis_swap_invariant() — penta-graphene is the motivating case.
     _lt        = structure.lattice_type
     _symmetric = unique_only and (
         _lt == "hexagonal"
         or (_lt == "rectangular" and abs(structure.a - structure.b) < 1e-3)
-    )
+    ) and basis_swap_invariant(structure)
     a1, a2 = structure.a1, structure.a2
     if _symmetric:
         # Compute the actual armchair boundary angle from the lattice vectors
