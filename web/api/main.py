@@ -317,12 +317,38 @@ async def polar_map(req: PolarRequest):
         from core.builder import build_nanotube as _bn
         from core.builder import check_spurious_bonds as _csb
 
+    # Where the wedge begins.  unique_sector_deg gives its opening angle only:
+    # the fundamental domain is that many degrees wide, but it starts at zero
+    # only when a mirror of the group lies along a1 -- 0 for graphene and
+    # biphenylene, 135 for penta-graphene, 147.3 for WI3, 113.8 for AgBr3.
+    # Measured on the representatives: the window is the complement of the
+    # largest angular gap, modulo 180, because rolling makes Ch and -Ch the
+    # same tube.
+    all_th = sorted(r.theta_deg for r in results)
+    theta_start = 0.0
+    if all_th:
+        gaps = [(all_th[(i + 1) % len(all_th)] - all_th[i]) % 180.0
+                for i in range(len(all_th))]
+        k = max(range(len(gaps)), key=lambda i: gaps[i])
+        theta_start = all_th[(k + 1) % len(all_th)]
+
     points: list[dict] = []
     for r in results:
         # Server-side strain filter
         if req.strain_max is not None and r.strain > req.strain_max:
             continue
-        theta_rad = math.radians(r.theta_deg)
+        # UNWRAPPED into [theta_start, theta_start + 180).  theta_deg is
+        # reported in [0, 180) -- the canonical chiral angle -- but a window
+        # that starts at 135 degrees is crossed by the 180 wrap, so plotting
+        # the raw value split penta-graphene's fan into two lumps, one at
+        # [135, 180) and one at [0, 45) where [180, 225) belonged.
+        # Rotated so the wedge always starts at zero ON SCREEN.  Its physical
+        # start is 135 degrees for penta-graphene and 147.3 for WI3, and drawn
+        # there the fan pointed down-left with the D axis labels piled on the
+        # far side -- correct, and unreadable.  The edge annotations carry the
+        # true angles instead.
+        theta_plot = ((r.theta_deg - theta_start) % 180.0)
+        theta_rad = math.radians(theta_plot)
         x = r.diameter * math.cos(theta_rad)
         y = r.diameter * math.sin(theta_rad)
 
@@ -358,6 +384,9 @@ async def polar_map(req: PolarRequest):
         "points":        points,
         "dmax":          req.max_diameter,
         "theta_max":     theta_max,
+        # Not rounded: the wedge is drawn from this value, and a point sitting
+        # exactly on the start would fall outside an edge rounded away from it.
+        "theta_start":   float(theta_start),
         "lattice_type":  structure.lattice_type,
         "a":             round(structure.a, 4),
         "b":             round(structure.b, 4),

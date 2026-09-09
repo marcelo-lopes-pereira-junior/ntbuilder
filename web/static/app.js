@@ -877,6 +877,13 @@ function getFilteredPoints(data) {
 }
 
 function renderPolar(data) {
+  // Clear the overlay here, not only in runPolar's success path.  Four of the
+  // five callers re-render from cached data -- language, theme and the two
+  // colour toggles -- and a failed request leaves "HTTP 502" sitting in the
+  // overlay, which then floats over a perfectly good plot.
+  const ov = $("polar-empty");
+  if (ov) ov.style.display = "none";
+
   const pts = getFilteredPoints(data);
   if (!pts.length) return;
 
@@ -886,12 +893,37 @@ function renderPolar(data) {
   const colorLabel = mode === "n_atoms" ? t("map.colorLabelAtoms") : t("map.colorLabelStrain");
   const cMin = Math.min(...colorVals), cMax = Math.max(...colorVals) || 1e-6;
   const dmax = data.dmax, thetaMax = data.theta_max;
+  // theta_max is the wedge's WIDTH; theta_start says where it begins.  It is
+  // zero only when a mirror of the group lies along a1 -- 135 degrees for
+  // penta-graphene, 147.3 for WI3 -- and drawing from zero put those systems
+  // outside their own wedge.
+  const t0Rad = 0.0;                       // o servidor ja girou os pontos
   const tmRad = thetaMax * Math.PI / 180;
+
+  // The wedge can open past 90 degrees -- a lattice whose only symmetry is a
+  // two-fold gives a 180 degree sector -- and then cos and sin AT THE EDGE
+  // stop being the extremes of the wedge: its top is at theta = 90 and its
+  // left at theta = 180.  Reading the plot box off the edge angle collapsed
+  // the y range to zero for a 180 degree sector (sin 180 = 0), which drew the
+  // whole map as a flat horizontal band, and clipped every point past x = 0.
+  // The box is SAMPLED over [t0, t1].  cos and sin at the edges are not the
+  // extremes of a wedge that spans 90 or 180 degrees, nor of one that starts
+  // away from zero: penta-graphene's [135, 225] reaches y = -0.71 dmax, which
+  // no edge value reports.  The wedge contains the origin, so 0 seeds each.
+  let xLeft = 0.0, xRight = 0.0, yBot = 0.0, yTop = 0.0;
+  for (let i = 0; i <= 240; i++) {
+    const t = t0Rad + (i / 240) * (tmRad - t0Rad);
+    const cx = dmax * Math.cos(t), cy = dmax * Math.sin(t);
+    if (cx < xLeft)  xLeft  = cx;
+    if (cx > xRight) xRight = cx;
+    if (cy < yBot)   yBot   = cy;
+    if (cy > yTop)   yTop   = cy;
+  }
 
   function arc(r, nPts = 80) {
     const ax = [], ay = [];
     for (let i = 0; i <= nPts; i++) {
-      const t = (i / nPts) * tmRad;
+      const t = t0Rad + (i / nPts) * (tmRad - t0Rad);
       ax.push(r * Math.cos(t)); ay.push(r * Math.sin(t));
     }
     return { ax, ay };
@@ -947,8 +979,10 @@ function renderPolar(data) {
   const boundaryLinesTrace = {
     type: "scatter", mode: "lines",
     ...concat(
-      { x: [0, dmax * 1.02], y: [0, 0] },
-      { x: [0, dmax * 1.02 * Math.cos(tmRad)], y: [0, dmax * 1.02 * Math.sin(tmRad)] },
+      { x: [0, dmax * 1.02 * Math.cos(t0Rad)],
+        y: [0, dmax * 1.02 * Math.sin(t0Rad)] },
+      { x: [0, dmax * 1.02 * Math.cos(tmRad)],
+        y: [0, dmax * 1.02 * Math.sin(tmRad)] },
     ),
     line: { color: c.radial, width: 1, dash: "dot" },
     hoverinfo: "skip", showlegend: false,
@@ -1024,7 +1058,7 @@ function renderPolar(data) {
   // independent of whether any individual chirality is currently marked.
   const anyHasSpuriousField = pts.some(p => Array.isArray(p.spurious));
   const xLegend = dmax * 1.04;
-  const yLegendTop = dmax * 0.92 * Math.sin(tmRad);
+  const yLegendTop = 0.92 * yTop;   // sin(tmRad) put it on the Zigzag label
   const yLegendStep = dmax * 0.06;
   const spuriousLegend = anyHasSpuriousField ? [
     {
@@ -1046,24 +1080,33 @@ function renderPolar(data) {
   const annotations = [
     { x: dmax * 1.05, y: -dmax * 0.03, text: "D (Å)", showarrow: false,
       font: { size: 8, color: c.text }, xanchor: "left", yanchor: "top" },
-    { x: dmax * 1.04, y: 0, text: "<b>Zigzag</b> (m=0)", showarrow: false,
-      font: { size: 9, color: c.text }, xanchor: "left", yanchor: "middle" },
+    // "Zigzag" and "Armchair" name the edges only when the wedge really is
+    // [0, theta_max]; on a lattice whose mirror does not lie along a1 the
+    // edges are two other directions, and naming them zigzag and armchair
+    // would be simply false.  There they carry their angle instead.
+    { x: dmax * 1.04 * Math.cos(t0Rad), y: dmax * 1.04 * Math.sin(t0Rad),
+      text: (data.theta_start || 0) < 1.0 ? "<b>Zigzag</b> (m=0)"
+            : `${(data.theta_start || 0).toFixed(0)}°`,
+      showarrow: false, font: { size: 9, color: c.text },
+      xanchor: Math.cos(t0Rad) < 0 ? "right" : "left", yanchor: "middle" },
     { x: dmax * 1.04 * Math.cos(tmRad), y: dmax * 1.04 * Math.sin(tmRad),
-      text: "<b>Armchair</b> (n=m)", showarrow: false,
-      font: { size: 9, color: c.text }, xanchor: "left", yanchor: "bottom" },
+      text: (data.theta_start || 0) < 1.0 ? "<b>Armchair</b> (n=m)"
+            : `${((data.theta_start || 0) + thetaMax).toFixed(0)}°`,
+      showarrow: false, font: { size: 9, color: c.text },
+      xanchor: Math.cos(tmRad) < 0 ? "right" : "left", yanchor: "bottom" },
     { x: 0, y: -dmax * 0.03, text: "0", showarrow: false,
       font: { size: 8, color: c.text }, xanchor: "center", yanchor: "top" },
     ...dLabels, ...tLabels, ...zigzagLabels, ...armLabels, ...spuriousLegend,
   ];
 
-  const yMax = dmax * Math.sin(tmRad);
+  const yMax = yTop;   // amostrado acima
   const layout = {
     paper_bgcolor: "transparent", plot_bgcolor: "transparent",
     margin: { l: 20, r: 20, t: 8, b: 60 },
-    xaxis: { range: [-dmax * 0.05, dmax * 1.18], color: c.text,
+    xaxis: { range: [xLeft - dmax * 0.06, xRight + dmax * 0.20], color: c.text,
              gridcolor: "transparent", zerolinecolor: "transparent",
              tickfont: { size: 8, color: c.text }, showticklabels: false },
-    yaxis: { range: [-dmax * 0.08, yMax * 1.15], color: c.text,
+    yaxis: { range: [yBot - dmax * 0.08, yMax + dmax * 0.10], color: c.text,
              gridcolor: "transparent", zerolinecolor: "transparent",
              tickfont: { size: 8, color: c.text }, showticklabels: false,
              scaleanchor: "x", scaleratio: 1 },
