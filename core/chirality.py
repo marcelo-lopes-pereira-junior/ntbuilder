@@ -88,7 +88,17 @@ class ChiralityResult:
             np.dot(self.Ch_vec, _perp(self.a1)),
             np.dot(self.Ch_vec, self.a1)
         )
-        self.theta_deg = math.degrees(th)
+        # Folded into [0, 180).  Rolling makes Ch and -Ch the same tube, so the
+        # group that acts on the indices always contains -I and the wedge of
+        # distinct chiral directions is 180 degrees wide -- but on a lattice
+        # too poor in symmetry to bring every orbit into the first quadrant the
+        # representative comes back with m < 0, and its raw angle is negative.
+        # Left negative, 41 % of the points of an oblique polar map (measured
+        # on the reduced AgBr3 cell: 90 of 221, down to -78.8 degrees) fell
+        # below the axis and were clipped, while the wedge drawn from 0 to 180
+        # sat empty above gamma.  The fold reports the direction of (-n, -m),
+        # which is the same tube.
+        self.theta_deg = math.degrees(th) % 180.0
         # General formula: n_atoms_cell × |n·t2 − m·t1|
         self.n_atoms = self.n_atoms_cell * abs(self.n * self.t2 - self.m * self.t1)
 
