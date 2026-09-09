@@ -91,20 +91,33 @@ def snap_to_symmetry(structure: LatticeStructure) -> tuple[LatticeStructure, str
             f"a: {a_len:.5f} / {b_len:.5f} Å → {a_ideal:.5f} Å  |  "
             f"γ: {g_old:.4f}° → 60.0000°"
         )
+    elif lt == "square":
+        a_ideal = (a_len + b_len) / 2.0
+        a1_new  = np.array([a_ideal, 0.0])
+        a2_new  = np.array([0.0, a_ideal])
+        desc = (
+            f"a: {a_len:.5f} / {b_len:.5f} Å → {a_ideal:.5f} Å  |  "
+            f"γ: {g_old:.4f}° → 90.0000°"
+        )
     elif lt == "rectangular":
         a1_new = np.array([a_len, 0.0])
         a2_new = np.array([0.0, b_len])
-        if abs(a_len - b_len) < 1e-3 * a_len:
-            # Square
-            a_ideal = (a_len + b_len) / 2.0
-            a1_new  = np.array([a_ideal, 0.0])
-            a2_new  = np.array([0.0, a_ideal])
-            desc = (
-                f"a: {a_len:.5f} / {b_len:.5f} Å → {a_ideal:.5f} Å  |  "
-                f"γ: {g_old:.4f}° → 90.0000°"
-            )
-        else:
-            desc = f"γ: {g_old:.4f}° → 90.0000°  (a = {a_len:.5f} Å, b = {b_len:.5f} Å)"
+        desc = f"γ: {g_old:.4f}° → 90.0000°  (a = {a_len:.5f} Å, b = {b_len:.5f} Å)"
+    elif lt == "centred rectangular":
+        # a = b is the symmetry; gamma is free and stays.  This branch did not
+        # exist -- the rhombic cell fell through to "oblique" and was returned
+        # untouched -- and it is the one that matters most for an exact T: the
+        # mirror direction (1,1) closes exactly only while a = b holds, and
+        # C2DB's WI3 ships a and b agreeing to the 13th decimal and no
+        # further, which formally destroys it.
+        a_ideal = (a_len + b_len) / 2.0
+        g = math.radians(g_old)
+        a1_new = np.array([a_ideal, 0.0])
+        a2_new = np.array([a_ideal * math.cos(g), a_ideal * math.sin(g)])
+        desc = (
+            f"a: {a_len:.5f} / {b_len:.5f} Å → {a_ideal:.5f} Å  |  "
+            f"γ: {g_old:.4f}° kept (rhombic)"
+        )
     else:
         return structure, "Oblique lattice — nothing to snap."
 

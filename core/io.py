@@ -123,16 +123,39 @@ class LatticeStructure:
     @property
     def lattice_type(self) -> str:
         """
-        Crystal system of the 2D lattice.
+        The 2D Bravais class of THIS cell's metric.  All five of them.
 
-        'hexagonal'   |a₁|=|a₂| and γ=60° *or* γ=120° (both conventions used
-                       in XYZ/CIF files for the hexagonal lattice).
-        'rectangular' γ=90° (includes the square, a=b case).
-        'oblique'     everything else.
+        'hexagonal'            a=b, γ=60° or 120° (both conventions appear in
+                               XYZ/CIF files for the hexagonal lattice)
+        'square'               a=b, γ=90°
+        'centred rectangular'  a=b, any other γ — the rhombic primitive cell
+        'rectangular'          a≠b, γ=90°
+        'oblique'              everything else
+
+        Square used to be folded into 'rectangular' and the rhombic case into
+        'oblique', which mislabelled two of the paper's test systems:
+        penta-graphene is square (a=b=3.63 Å, γ=90°) and WI₃ is centred
+        rectangular (a=b=6.523 Å, γ=114.52°).  The distinction is not
+        cosmetic — the square lattice always closes an exact T, and the
+        rhombic one closes its two DIAGONALS while its axes do not.
+
+        This classifies the cell **as given**, not the lattice it may be a
+        non-primitive setting of.  The conventional centred rectangular cell
+        is a rectangle with a lattice point at its centre, and read as a
+        metric alone that is 'rectangular': CrPS₄'s experimental cell,
+        10.871 × 7.254 Å at 90°, is the centred setting of the rhombic
+        a=b=6.548 Å, γ=67.51° primitive cell its monolayer relaxes to.
+        :func:`core.symmetry.find_primitive_cell` is what turns one into the
+        other.
         """
         g = self.gamma_deg
-        if abs(self.a - self.b) < 1e-3 and (abs(g - 60) < 0.5 or abs(g - 120) < 0.5):
+        same = abs(self.a - self.b) < 1e-3
+        if same and (abs(g - 60) < 0.5 or abs(g - 120) < 0.5):
             return "hexagonal"
+        if same and abs(g - 90) < 0.5:
+            return "square"
+        if same:
+            return "centred rectangular"
         if abs(g - 90) < 0.5:
             return "rectangular"
         return "oblique"
@@ -140,7 +163,7 @@ class LatticeStructure:
     @property
     def is_square(self) -> bool:
         """True for square lattices (a=b, γ=90°)."""
-        return self.lattice_type == "rectangular" and abs(self.a - self.b) < 1e-3
+        return self.lattice_type == "square"
 
     def __repr__(self) -> str:
         return (

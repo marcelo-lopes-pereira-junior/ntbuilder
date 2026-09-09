@@ -284,21 +284,39 @@ class TestLatticeClassification:
     def test_oblique_gamma75(self):
         assert _oblique().lattice_type == "oblique"
 
-    def test_square_is_rectangular(self):
+    def test_square_is_square(self):
+        """a = b with γ = 90° is the square class, not rectangular.
+
+        It used to be folded into 'rectangular', which mislabelled
+        penta-graphene and hid the reason it always closes an exact T.
+        """
         a1 = np.array([3.0, 0.0])
         a2 = np.array([0.0, 3.0])
         s = LatticeStructure(a1=a1, a2=a2, atoms=[])
-        assert s.lattice_type == "rectangular"
+        assert s.lattice_type == "square"
+        assert s.is_square
 
     def test_hbn_is_hexagonal(self):
         """h-BN has a hexagonal lattice."""
         assert _hbn().lattice_type == "hexagonal"
 
-    def test_very_oblique_gamma20(self):
-        """A cell with γ = 20° is oblique."""
+    def test_rhombic_gamma20_is_centred_rectangular(self):
+        """a = b with γ = 20° is rhombic — the centred rectangular class.
+
+        It used to come back 'oblique' because io had no row for it, which is
+        how both of the extreme-γ example cells were misnamed.
+        """
         gamma = math.radians(20)
         a1 = np.array([3.0, 0.0])
         a2 = np.array([3.0 * math.cos(gamma), 3.0 * math.sin(gamma)])
+        s = LatticeStructure(a1=a1, a2=a2, atoms=[])
+        assert s.lattice_type == "centred rectangular"
+
+    def test_truly_oblique_is_oblique(self):
+        """a != b and γ != 90° is the only genuinely oblique case."""
+        gamma = math.radians(75)
+        a1 = np.array([3.0, 0.0])
+        a2 = np.array([4.2 * math.cos(gamma), 4.2 * math.sin(gamma)])
         s = LatticeStructure(a1=a1, a2=a2, atoms=[])
         assert s.lattice_type == "oblique"
 
@@ -408,7 +426,7 @@ class TestChirality:
         a2 = np.array([a * math.cos(gamma), a * math.sin(gamma)])
         s = LatticeStructure(a1=a1, a2=a2,
                              atoms=[{"symbol": "C", "pos": np.zeros(2), "z": 0.0}])
-        assert s.lattice_type == "oblique"          # still misnamed by io
+        assert s.lattice_type == "centred rectangular"
         assert abs(unique_sector_deg(s) - 90.0) < 0.01
         res = scan_chirality(s, n_max=5, m_max=5, max_diameter=40.0,
                              unique_only=True)

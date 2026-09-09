@@ -456,11 +456,9 @@ class PolarPanel(QWidget):
         theta_max_rad = math.radians(theta_max_deg)
 
         lt = self._structure.lattice_type if self._structure else "oblique"
-        _is_sym = lt == "hexagonal" or (
-            lt == "rectangular"
-            and self._structure is not None
-            and abs(self._structure.a - self._structure.b) < 1e-3
-        )
+        # lattice_type now names the square class itself, so the a == b test
+        # that used to distinguish it inside "rectangular" is gone.
+        _is_sym = lt in ("hexagonal", "square")
 
         if not pts:
             self._draw_sector_frame(dmax, theta_max_deg, theta_max_rad, _is_sym)
