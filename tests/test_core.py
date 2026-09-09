@@ -118,9 +118,12 @@ def _graphene_2x1():
 def _penta_like():
     """Square cell whose basis breaks the axis-swap mirror.
 
-    Mimics penta-graphene: a = b and γ = 90°, but the buckled atom sits at a
-    fractional position whose mirror image (v, u) is not occupied, so (n,m)
-    and (m,n) are inequivalent.
+    A fictional structure, *not* penta-graphene: it drops the (1/2, 1/2) site
+    and swaps two of the buckling signs, which is what leaves it with no
+    diagonal operation at all.  Real penta-graphene does have one — a glide,
+    mirror plus (1/2, 1/2) — so its (n, m) map does fold; see
+    ``test_penta_graphene_has_a_diagonal_glide``.  This cell is kept because a
+    basis that breaks the mirror outright still has to be detected.
     """
     a = 3.63
     a1 = np.array([a, 0.0])
@@ -373,11 +376,99 @@ class TestChirality:
         ch = compute_chirality(3, 2, _rectangular())
         assert ch.strain >= 0.0
 
-    def test_oblique_sector_gamma(self):
-        """Oblique unique sector equals γ, not 90°."""
+    def test_oblique_sector_is_a_half_turn(self):
+        """A truly oblique lattice has only +-I, so the wedge is 180 deg.
+
+        The old contract returned gamma here.  That was the opening angle of
+        the first quadrant, not a fundamental domain: gamma leaves the
+        directions between gamma and 180 deg unaccounted for, and those are
+        real tubes when nothing but inversion identifies them.
+        """
         from core.chirality import unique_sector_deg
-        s = _oblique()
-        assert abs(unique_sector_deg(s) - s.gamma_deg) < 0.01
+        assert abs(unique_sector_deg(_oblique()) - 180.0) < 0.01
+
+    def test_oblique_scan_reaches_negative_m(self):
+        """On an oblique lattice (n, -m) is a distinct tube and must be listed."""
+        res = scan_chirality(_oblique(), n_max=4, m_max=4, max_diameter=40.0,
+                             unique_only=True)
+        pairs = {(r.n, r.m) for r in res}
+        assert (3, 1) in pairs and (3, -1) in pairs
+
+    def test_centred_rectangular_folds(self):
+        """A rhombic cell is centred rectangular: it has a mirror and folds.
+
+        |a1| = |a2| forces the swap of the two axes to be an isometry, so the
+        lattice is centred rectangular whatever gamma is.  The old classifier
+        called anything outside 60/90/120 oblique and never folded it.
+        """
+        from core.chirality import unique_sector_deg
+        gamma = math.radians(70.0)
+        a = 3.4
+        a1 = np.array([a, 0.0])
+        a2 = np.array([a * math.cos(gamma), a * math.sin(gamma)])
+        s = LatticeStructure(a1=a1, a2=a2,
+                             atoms=[{"symbol": "C", "pos": np.zeros(2), "z": 0.0}])
+        assert s.lattice_type == "oblique"          # still misnamed by io
+        assert abs(unique_sector_deg(s) - 90.0) < 0.01
+        res = scan_chirality(s, n_max=5, m_max=5, max_diameter=40.0,
+                             unique_only=True)
+        pairs = {(r.n, r.m) for r in res}
+        assert (5, 0) in pairs and (0, 5) not in pairs
+
+    def test_penta_graphene_has_a_diagonal_glide(self):
+        """Real penta-graphene folds: (5,0) and (0,5) are one tube.
+
+        An earlier conclusion said otherwise.  It came from comparing the two
+        finite unit cells atom by atom, and the two cells differ by an axial
+        shift of |T|/2 — which wraps atoms across the cell boundary and changes
+        the distance list even though the infinite tubes coincide.  Applying the
+        minimum image along the axis settles it: the two agree to 2e-15 A.
+        """
+        cif = Path(__file__).resolve().parents[1] / "examples" / "Penta_Graphene.cif"
+        if not cif.exists():
+            pytest.skip("example not present")
+        from core.io import load_structure
+        from core.builder import build_nanotube
+        s = load_structure(str(cif))
+
+        def fingerprint(n, m):
+            ch = compute_chirality(n, m, s, search_limit=60)
+            p = np.asarray(build_nanotube(s, ch, vacuum=10.0).coords, float)
+            d = p[:, None, :] - p[None, :, :]
+            d[:, :, 2] -= ch.T_norm * np.round(d[:, :, 2] / ch.T_norm)
+            r = np.linalg.norm(d, axis=-1)
+            return np.sort(r[np.triu_indices(len(p), 1)])
+
+        assert np.abs(fingerprint(5, 0) - fingerprint(0, 5)).max() < 1e-9
+
+        from core.chirality import basis_swap_invariant
+        assert basis_swap_invariant(s) is True
+
+    def test_glide_counts_as_a_mirror(self):
+        """pm and pg enumerate alike: a glide is a mirror plus an origin shift.
+
+        The basis below maps onto itself under the axis swap only after a
+        translation of (1/2, 1/2).  Rolling is blind to that translation, so
+        the tube set must fold exactly as for a pure mirror.
+        """
+        from core.chirality import basis_swap_invariant
+        a = 4.0
+        s = LatticeStructure(a1=np.array([a, 0.0]), a2=np.array([0.0, a]),
+                             atoms=[{"symbol": "C", "pos": np.array([0.1, 0.2]) * a,
+                                     "z": 0.0},
+                                    {"symbol": "C", "pos": np.array([0.7, 0.6]) * a,
+                                     "z": 0.0}])
+        assert basis_swap_invariant(s) is True
+
+    def test_structure_group_is_a_subgroup_of_the_holohedry(self):
+        """A crystal can lose its lattice's symmetry, never gain it."""
+        from core.planegroup import lattice_point_group, structure_point_group
+        for s in (_graphene(), _penta_like(), _oblique(), _hbn()):
+            holo = lattice_point_group(s)
+            struct = structure_point_group(s)
+            assert len(struct) <= len(holo)
+            for U in struct:
+                assert any(np.array_equal(U, V) for V in holo)
 
     def test_swap_invariant_true_for_graphene(self):
         """Graphene's basis survives the axis-swap mirror, so folding is safe."""

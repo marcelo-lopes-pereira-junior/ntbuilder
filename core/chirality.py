@@ -267,15 +267,12 @@ def unique_sector_deg(structure: "LatticeStructure") -> float:
     pza-C10 structure with γ = 102.4°) some points have negative x in Cartesian
     polar coordinates; the panel accommodates this.
     """
-    lt = structure.lattice_type
-    if lt == "hexagonal":
-        return 30.0
-    if lt == "rectangular":
-        if abs(structure.a - structure.b) < 1e-3:
-            return 45.0
-        return 90.0
-    # oblique: sector is exactly [0°, γ]
-    return structure.gamma_deg
+    # Delegated to core.planegroup, which derives the wedge from the order of
+    # the group that actually acts on the indices instead of tabulating one
+    # answer per lattice name.  The old table had no row for the centred
+    # rectangular lattice and returned gamma for it, the oblique answer.
+    from core.planegroup import sector_deg
+    return sector_deg(structure)
 
 
 def basis_swap_invariant(structure: "LatticeStructure", tol: float = 2e-3) -> bool:
@@ -301,30 +298,10 @@ def basis_swap_invariant(structure: "LatticeStructure", tol: float = 2e-3) -> bo
 
     Returns True when the basis is invariant (folding is safe).
     """
-    atoms = structure.atoms
-    if len(atoms) < 2:
-        return True
-
-    M = np.array([structure.a1, structure.a2]).T
-    try:
-        fr = np.linalg.solve(M, np.array([a["pos"] for a in atoms]).T).T % 1.0
-    except np.linalg.LinAlgError:      # degenerate cell — do not fold
-        return False
-
-    syms = [a["symbol"] for a in atoms]
-    zs   = [float(a.get("z", 0.0)) for a in atoms]
-
-    for sym, f, z in zip(syms, fr, zs):
-        target = np.array([f[1], f[0]])
-        for sym2, f2, z2 in zip(syms, fr, zs):
-            if sym2 != sym or abs(z2 - z) > 1e-3:
-                continue
-            # compare modulo a lattice translation
-            if np.allclose((f2 - target + 0.5) % 1.0 - 0.5, 0.0, atol=tol):
-                break
-        else:
-            return False
-    return True
+    from core.planegroup import structure_point_group
+    swap = np.array([[0, 1], [1, 0]], dtype=np.int64)
+    return any(np.array_equal(U, swap)
+               for U in structure_point_group(structure, tol))
 
 
 def scan_chirality(
@@ -359,65 +336,43 @@ def scan_chirality(
     if m_max is None:
         m_max = n_max
 
-    # Determine the unique-sector angular cutoff.
-    # For symmetric lattices (hexagonal, square) we filter by the chiral angle
-    # of Ch = n·a₁ + m·a₂ rather than by an index heuristic.
-    # This is convention-agnostic: it works for both γ=60° and γ=120°.
-    #   γ=60°  hexagonal : armchair at (n,n)  → θ=30° (same n→2n rule)
-    #   γ=120° hexagonal : armchair at (2n,n) → θ=30° (m>n gives θ>30°, excluded)
-    #   square (γ=90°)   : armchair at (n,n)  → θ=45°
-    # The lattice condition (|a₁| = |a₂|) is necessary but NOT sufficient: the
-    # basis must also survive the axis-swap mirror, otherwise (n,m) and (m,n)
-    # are physically distinct tubes and folding would hide half the map.
-    # See basis_swap_invariant() — penta-graphene is the motivating case.
-    _lt        = structure.lattice_type
-    _symmetric = unique_only and (
-        _lt == "hexagonal"
-        or (_lt == "rectangular" and abs(structure.a - structure.b) < 1e-3)
-    ) and basis_swap_invariant(structure)
+    # Which (n, m) are distinct is decided by the orbits of the group that acts
+    # on the indices -- the structure's point group plus inversion -- rather
+    # than by an angular cutoff read off the lattice name.  That is what makes
+    # every one of the 17 plane groups come out right, and it also widens the
+    # scan from the first quadrant to the half plane: on a lattice whose only
+    # automorphisms are +-I the quadrant spans chiral directions [0, gamma]
+    # and hides every tube with m < 0.  Where the symmetry does justify the
+    # quadrant, orbit reduction returns it unchanged.
+    from core.planegroup import unique_indices
     a1, a2 = structure.a1, structure.a2
-    if _symmetric:
-        # Compute the actual armchair boundary angle from the lattice vectors
-        # (a1 + a2 is always the armchair direction for hexagonal/square).
-        # This avoids false rejections when γ deviates slightly from the ideal
-        # value (e.g. 60.0001° instead of 60.0000°).
-        arm_vec   = a1 + a2
-        _theta_max = math.degrees(math.atan2(arm_vec[1], arm_vec[0]))
+    if unique_only:
+        pairs = unique_indices(structure, n_max, m_max)
     else:
-        _theta_max = 90.0
+        pairs = [(n, m) for n in range(n_max + 1) for m in range(m_max + 1)
+                 if n or m]
 
     results = []
-    for n in range(n_max + 1):
-        for m in range(m_max + 1):
-            # Skip pairs outside the symmetry-unique angular sector.
-            # We compute the actual chiral angle from the lattice vectors so
-            # the cutoff is correct regardless of γ convention.
-            if _symmetric:
-                Ch_test = n * a1 + m * a2
-                theta_test = math.degrees(math.atan2(Ch_test[1], Ch_test[0]))
-                if theta_test > _theta_max + 1e-6 or theta_test < -1e-6:
-                    continue
-            # Cheap diameter pre-filter.  |Ch|/π is *exactly* the diameter
-            # that ChiralityResult computes, so discarding out-of-range pairs
-            # here is identical to the ``res.diameter > max_diameter`` check
-            # below — but it skips the expensive T-vector search for the vast
-            # majority of pairs when n_max is large (e.g. the polar map at
-            # n_max=100 scans ~10 k pairs but only a few hundred are ≤ dmax).
-            if n or m:
-                D_cheap = float(np.linalg.norm(n * a1 + m * a2)) / math.pi
-                if D_cheap > max_diameter:
-                    continue
-            res = compute_chirality(n, m, structure,
-                                    search_limit=search_limit)
-            if res is None:
-                continue
-            if res.diameter > max_diameter:
-                continue
-            if max_atoms is not None and res.n_atoms > max_atoms:
-                continue
-            if max_T_norm is not None and res.T_norm > max_T_norm:
-                continue
-            results.append(res)
+    for n, m in pairs:
+        # Cheap diameter pre-filter.  |Ch|/π is *exactly* the diameter that
+        # ChiralityResult computes, so discarding out-of-range pairs here is
+        # identical to the ``res.diameter > max_diameter`` check below — but it
+        # skips the expensive T-vector search for the vast majority of pairs
+        # when n_max is large (the polar map at n_max=100 scans ~10 k pairs and
+        # keeps only a few hundred).
+        D_cheap = float(np.linalg.norm(n * a1 + m * a2)) / math.pi
+        if D_cheap > max_diameter:
+            continue
+        res = compute_chirality(n, m, structure, search_limit=search_limit)
+        if res is None:
+            continue
+        if res.diameter > max_diameter:
+            continue
+        if max_atoms is not None and res.n_atoms > max_atoms:
+            continue
+        if max_T_norm is not None and res.T_norm > max_T_norm:
+            continue
+        results.append(res)
 
     results.sort(key=lambda r: (r.diameter, r.theta_deg))
     return results
