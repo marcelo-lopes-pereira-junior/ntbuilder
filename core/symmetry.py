@@ -181,12 +181,40 @@ def find_primitive_cell(
     """
     n_in = len(structure.atoms)
 
-    try:
-        result = _primitive_spglib(structure, tol)
-    except Exception:
-        result = _primitive_builtin(structure, tol)
+    def area_per_atom(x) -> float:
+        b1 = np.asarray(x.a1, float)[:2]
+        b2 = np.asarray(x.a2, float)[:2]
+        return abs(float(b1[0] * b2[1] - b1[1] * b2[0])) / max(len(x.atoms), 1)
 
-    result = _orient_and_wrap(result)
+    # A reduction removes atoms AND area in the same proportion, so the area
+    # per atom is conserved exactly.  It is the cheapest possible check and it
+    # catches every way this can go wrong: a wrong basis vector, an invented
+    # symmetry, a dropped sublattice.  Without it a broken cell reached the
+    # builder silently -- the AgBr3 monolayer came back with four times the
+    # area per atom and built a single strand instead of a tube.
+    ref = area_per_atom(structure)
+    candidates = []
+    try:
+        candidates.append(_primitive_spglib(structure, tol))
+    except Exception:
+        pass
+    try:
+        candidates.append(_primitive_builtin(structure, tol))
+    except Exception:
+        pass
+
+    result = None
+    for cand in candidates:
+        cand = _orient_and_wrap(cand)
+        if abs(area_per_atom(cand) - ref) <= 0.02 * ref:
+            result = cand
+            break
+    if result is None:
+        # Nothing trustworthy: hand back the input rather than a wrong cell.
+        return structure, ("Primitive-cell search rejected: no candidate "
+                           "conserved the area per atom "
+                           f"({ref:.3f} A^2/atom). Structure unchanged.")
+
     n_out  = len(result.atoms)
     if n_out == n_in:
         desc = "Already primitive — no reduction possible."
@@ -204,10 +232,32 @@ def find_primitive_cell(
 # ── spglib backend ────────────────────────────────────────────────────────────
 
 def _primitive_spglib(structure: LatticeStructure, tol: float) -> LatticeStructure:
+    """Primitive cell via spglib, with the slab's third dimension respected.
+
+    Three things here are not optional, and each was a live bug.
+
+    The out-of-plane offsets go IN.  Forcing every atom to z = 0.5 hands
+    spglib a flattened structure, which has symmetry the slab does not: on the
+    AgBr3 monolayer the flat projection reduces 16 atoms to 4, while the real
+    puckered slab reduces to 8.
+
+    The vacuum axis is identified, not assumed.  spglib is free to return the
+    basis in any order, and it does: for that same AgBr3 cell the 30 A vacuum
+    vector comes back as row 2, with the two in-plane vectors in rows 1 and 3.
+    Taking rows 1 and 2 as the plane adopted the vacuum as a lattice vector --
+    a 30 A period with nothing in it -- and the tube built on it came out as a
+    single strand.  ``no_idealize=True`` keeps the input Cartesian frame, so
+    the vacuum row is the one along the original z and the other two carry
+    z = 0 exactly.
+
+    The offsets come back OUT, recovered from the fractional coordinate along
+    the vacuum axis.  Returning z = 0 for every atom flattened MoSSe and
+    penta-graphene, which silently turns roll_inward into a no-op -- the Janus
+    non-equivalence is exactly what those systems are in the test set for.
+    """
     import spglib  # raises ImportError if not installed
 
     a1, a2 = structure.a1, structure.a2
-    # Build a 3D cell with a large vacuum c-axis so spglib treats it as 2D
     c_vac  = 30.0
     lattice = np.array([
         [a1[0], a1[1], 0.0],
@@ -224,26 +274,44 @@ def _primitive_spglib(structure: LatticeStructure, tol: float) -> LatticeStructu
     numbers        = []
     for atom in structure.atoms:
         f2 = np.linalg.solve(M, atom["pos"])
-        positions_frac.append([float(f2[0]), float(f2[1]), 0.5])
+        zf = 0.5 + float(atom.get("z", 0.0)) / c_vac
+        positions_frac.append([float(f2[0]), float(f2[1]), zf])
         numbers.append(sym2num[atom["symbol"]])
 
     cell = (lattice, positions_frac, numbers)
-    prim = spglib.find_primitive(cell, symprec=tol)
+    prim = spglib.standardize_cell(cell, symprec=tol,
+                                   to_primitive=True, no_idealize=True)
     if prim is None:
-        raise RuntimeError("spglib: find_primitive returned None")
+        prim = spglib.find_primitive(cell, symprec=tol)
+    if prim is None:
+        raise RuntimeError("spglib: no primitive cell returned")
 
     prim_lattice, prim_frac, prim_nums = prim
+    prim_lattice = np.asarray(prim_lattice, float)
+    prim_frac    = np.asarray(prim_frac, float)
 
-    # Verify the primitive cell is actually in the XY plane
-    a1_new = prim_lattice[0, :2].copy()
-    a2_new = prim_lattice[1, :2].copy()
+    # Which row is the vacuum?  The one most nearly along the original z.
+    zhat = np.array([0.0, 0.0, 1.0])
+    k_vac = int(np.argmax(np.abs(prim_lattice @ zhat)))
+    plane = [i for i in range(3) if i != k_vac]
+    if any(abs(prim_lattice[i, 2]) > 1e-6 * c_vac for i in plane):
+        raise RuntimeError("spglib: primitive cell is not a slab in the XY plane")
+
+    i, j = plane
+    v1 = prim_lattice[i, :2].copy()
+    v2 = prim_lattice[j, :2].copy()
+    # Keep the pair right-handed, or the cell comes back mirrored.
+    if v1[0] * v2[1] - v1[1] * v2[0] < 0.0:
+        i, j = j, i
+        v1, v2 = v2, v1
 
     new_atoms = []
     for frac3, num in zip(prim_frac, prim_nums):
-        pos = float(frac3[0]) * a1_new + float(frac3[1]) * a2_new
-        new_atoms.append({"symbol": num2sym[num], "pos": pos, "z": 0.0})
+        pos = float(frac3[i]) * v1 + float(frac3[j]) * v2
+        z   = (float(frac3[k_vac]) - 0.5) * c_vac
+        new_atoms.append({"symbol": num2sym[num], "pos": pos, "z": z})
 
-    return LatticeStructure(new_atoms, a1_new, a2_new, source=structure.source)
+    return LatticeStructure(new_atoms, v1, v2, source=structure.source)
 
 
 # ── Built-in backend ──────────────────────────────────────────────────────────
