@@ -49,9 +49,10 @@ def _snap(structure):
     return structure
 
 
-def _chirality(n, m, structure):
+def _chirality(n, m, structure, max_strain=None, max_t=None):
     from core.chirality import compute_chirality
-    ch = compute_chirality(n, m, structure)
+    ch = compute_chirality(n, m, structure,
+                           max_strain=max_strain, max_T_norm=max_t)
     if ch is None:
         sys.exit(f"Error: (n,m) = ({n},{m}) is degenerate (n=m=0).")
     return ch
@@ -76,10 +77,28 @@ def _export(nt, path: str):
 def cmd_build(args):
     """Build a single nanotube and export."""
     structure  = _snap(_load(args.input))
-    chirality  = _chirality(args.n, args.m, structure)
+
+    if getattr(args, "list_t", False):
+        # The trade-off front: cell length against periodicity residual.  It
+        # is the search's own candidate list, so printing it costs nothing.
+        from core.chirality import T_options
+        n_cell = len(structure.atoms)
+        print(f"({args.n},{args.m})  cell length vs periodicity residual")
+        print(f"  {'t1':>7s} {'t2':>7s} {'|T| (A)':>11s} {'atoms':>10s} "
+              f"{'strain (%)':>12s}")
+        for c in T_options(args.n, args.m, structure.a1, structure.a2, 300):
+            nat = n_cell * abs(args.n * c["t2"] - args.m * c["t1"])
+            print(f"  {c['t1']:7d} {c['t2']:7d} {c['T_norm']:11.3f} "
+                  f"{nat:10,} {c['strain']:12.4f}")
+        return
+
+    chirality  = _chirality(args.n, args.m, structure,
+                            max_strain=getattr(args, "max_strain", None),
+                            max_t=getattr(args, "max_t", None))
 
     print(f"Building ({args.n},{args.m})  D={chirality.diameter:.4f} Å  "
-          f"L={chirality.T_norm:.4f} Å  atoms={chirality.n_atoms}")
+          f"L={chirality.T_norm:.4f} Å  atoms={chirality.n_atoms}  "
+          f"strain={chirality.strain:.4f} %")
 
     nt = _build(structure, chirality, args.vacuum, args.roll_inward)
 
@@ -347,6 +366,14 @@ def make_parser() -> argparse.ArgumentParser:
     pb.add_argument("--vacuum",        type=float, default=10.0, help="Vacuum padding (Å)")
     pb.add_argument("--repeat",        type=int,   default=1,    help="Axial replications")
     pb.add_argument("--roll-inward",   action="store_true",      help="Roll buckled structures inward")
+    pb.add_argument("--max-strain",    type=float, default=None,
+                    help="Accept this periodicity residual (%%) in exchange for "
+                         "the shortest cell that meets it")
+    pb.add_argument("--max-t",         type=float, default=None,
+                    help="Cap |T| (A); take the best residual that fits")
+    pb.add_argument("--list-t",        action="store_true",
+                    help="Print the cell-length / residual trade-off front "
+                         "for (n,m) and exit")
 
     # ── mwnt ──────────────────────────────────────────────────────────────────
     pm = sub.add_parser("mwnt", help="Build a multi-walled nanotube")

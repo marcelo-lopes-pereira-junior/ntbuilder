@@ -86,7 +86,8 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from core.io import load_structure, LatticeStructure                          # noqa: E402
-from core.chirality import scan_chirality, compute_chirality, unique_sector_deg  # noqa: E402
+from core.chirality import (scan_chirality, compute_chirality,          # noqa: E402
+                            unique_sector_deg, T_options)
 from core.builder import build_nanotube, check_spurious_bonds                 # noqa: E402
 from core.exporters import (                                                   # noqa: E402
     export, write_xyz, write_pdb, write_lammps, write_poscar, write_qe,
@@ -399,6 +400,38 @@ async def polar_map(req: PolarRequest):
 
 
 # ── Build ─────────────────────────────────────────────────────────────────────
+@app.post("/api/tvectors")
+async def tvectors(req: BuildRequest):
+    """The cell-length / residual trade-off front for one (n, m).
+
+    Not an extra computation: only the continued-fraction convergents of the
+    ideal t1/t2 ratio can improve on their predecessors, so the search's own
+    candidate list IS the front.  It lets the operator pick a cell small
+    enough to compute with -- AgBr3 (4,1) offers 432 atoms at 0.78 % where
+    the exact answer needs 12 208 -- instead of hunting for a search limit
+    that happens to produce one.
+    """
+    struct_path = _resolve_struct(req.file_id, req.example)
+    try:
+        structure = load_structure(str(struct_path))
+    except Exception as exc:
+        raise HTTPException(400, f"Could not read structure file: {exc}") from exc
+    try:
+        structure, _ = snap_to_symmetry(structure)
+    except Exception:
+        pass
+    n_cell = len(structure.atoms)
+    rows = []
+    for c in T_options(req.n, req.m, structure.a1, structure.a2, 300):
+        rows.append({
+            "t1": c["t1"], "t2": c["t2"],
+            "T_norm": round(c["T_norm"], 4),
+            "n_atoms": n_cell * abs(req.n * c["t2"] - req.m * c["t1"]),
+            "strain": c["strain"],
+        })
+    return {"n": req.n, "m": req.m, "options": rows}
+
+
 @app.post("/api/build")
 async def build(req: BuildRequest):
     """Build a nanotube, save all output formats, return metadata + XYZ preview."""
@@ -415,7 +448,11 @@ async def build(req: BuildRequest):
     except Exception:
         pass
 
-    chirality = compute_chirality(req.n, req.m, structure)
+    chirality = compute_chirality(
+        req.n, req.m, structure,
+        max_strain=getattr(req, "max_strain", None),
+        max_T_norm=getattr(req, "max_T_norm", None),
+    )
     if chirality is None:
         raise HTTPException(400, "Invalid chirality: n=m=0 is degenerate.")
 

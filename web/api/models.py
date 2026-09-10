@@ -29,6 +29,12 @@ class BuildRequest(BaseModel):
     n_repeat:    int            = Field(1, ge=1, le=20)
     vacuum:      float          = Field(10.0, ge=1.0, le=50.0)
     roll_inward: bool           = False
+    # Trade exactness for a shorter cell.  max_strain is a tolerance in per
+    # cent: the shortest T whose periodicity residual is within it, instead of
+    # the most exact one whatever the length.  max_T_norm caps |T| in
+    # angstroms.  Both default to off, so the answer is unchanged.
+    max_strain:  Optional[float] = Field(None, gt=0.0, le=100.0)
+    max_T_norm:  Optional[float] = Field(None, gt=0.0, le=1.0e5)
     # Optional per-pair bond cutoffs: {"C-C": 1.8, "B-N": 1.65, ...}
     bond_cutoffs: Optional[dict] = None
 

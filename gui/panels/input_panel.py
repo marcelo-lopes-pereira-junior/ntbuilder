@@ -255,6 +255,28 @@ class InputPanel(QWidget):
         self._roll_row_lbl.setVisible(False)
         self.chk_roll_in.setVisible(False)
         opt_lay.addRow(self._roll_row_lbl, self.chk_roll_in)
+
+        # Trade exactness for a cell you can actually compute with.  Zero
+        # means "most exact T, whatever its length", which is the historical
+        # behaviour.  Anything else returns the SHORTEST T whose periodicity
+        # residual is within tolerance: on the AgBr3 monolayer's (4,1), 1 %
+        # buys 432 atoms in a 53.7 A cell where the exact answer needs 12 208
+        # atoms in 1518 A.
+        self.spin_tol = QDoubleSpinBox()
+        self.spin_tol.setRange(0.0, 100.0)
+        self.spin_tol.setDecimals(4)
+        self.spin_tol.setSingleStep(0.01)
+        self.spin_tol.setValue(0.0)
+        self.spin_tol.setSuffix(" %")
+        self.spin_tol.setSpecialValueText("exact")
+        self.spin_tol.setToolTip(
+            "Accepted periodicity residual.\n"
+            "'exact' takes the most exact T whatever its length; a tolerance "
+            "takes the shortest cell that meets it.\n"
+            "The full length-vs-residual front is available from the CLI "
+            "(ntbuilder build … --list-t) and the web API (/api/tvectors)."
+        )
+        opt_lay.addRow("Strain tolerance", self.spin_tol)
         # Forward toggle state to the rest of the application so the polar
         # map can re-evaluate which chiralities develop spurious bonds.
         self.chk_roll_in.toggled.connect(self.roll_direction_changed.emit)
@@ -407,13 +429,18 @@ class InputPanel(QWidget):
             from core import compute_chirality
             ch = compute_chirality(
                 n, m, self._structure,
-                search_limit=self.spin_search.value()
+                search_limit=self.spin_search.value(),
+                max_strain=self.max_strain(),
             )
             self.lbl_preview.setText(
                 f"D = {ch.diameter:.3f} Å\n"
                 f"θ = {ch.theta_deg:.2f}°\n"
                 f"atoms = {ch.n_atoms}\n"
-                f"strain = {ch.strain:.4f}%"
+                # |T| beside the strain: the residual can always be made
+                # smaller by taking a longer cell, so reporting one without
+                # the other hides half of the trade.
+                f"strain = {ch.strain:.4f}%\n"
+                f"|T| = {ch.T_norm:.2f} Å · {ch.n_atoms} atoms"
             )
         except Exception:
             self.lbl_preview.setText("—")
@@ -451,6 +478,11 @@ class InputPanel(QWidget):
             self.structure_loaded.emit(new_struct)
         except Exception as exc:
             self.lbl_sym_status.setText(f"⚠ {exc}")
+
+    def max_strain(self) -> float | None:
+        """The accepted residual in per cent, or None for 'most exact'."""
+        v = float(self.spin_tol.value())
+        return v if v > 0.0 else None
 
     def _on_build(self):
         n           = self.spin_n.value()

@@ -289,11 +289,75 @@ def _bounded_denominators(x: float, limit: int) -> list[int]:
     return sorted({t for t in out if 1 <= t <= limit})
 
 
+def T_options(
+    n: int, m: int, a1: np.ndarray, a2: np.ndarray,
+    limit: int = 300,
+) -> list[dict]:
+    """The trade-off front between cell length and periodicity residual.
+
+    Every candidate that can hold the record, cheapest cell first.  Each entry
+    is ``{t1, t2, T_norm, strain}`` with strain in per cent, and the list is a
+    Pareto front: |T| grows down it and the residual falls.
+
+    This is not an extra computation -- it is the search itself.  Only the
+    continued-fraction convergents of the ideal ratio can improve on their
+    predecessors, so the candidate list IS the front, with O(log limit)
+    entries instead of thousands.  On the AgBr3 monolayer's (4, 1) it runs
+    from 112 atoms at 64 % down to 12 208 atoms at 0.0004 %, and a user who
+    wants a cell small enough for DFT picks a row rather than hunting for a
+    search_limit that happens to produce it.
+    """
+    Ch = n * a1 + m * a2
+    Ch_norm = float(np.linalg.norm(Ch))
+    if Ch_norm < 1e-12:
+        return [{"t1": 0, "t2": 1, "T_norm": float(np.linalg.norm(a2)),
+                 "strain": 0.0}]
+    dot_Ch_a1 = float(np.dot(Ch, a1))
+    dot_Ch_a2 = float(np.dot(Ch, a2))
+    if abs(dot_Ch_a1) < 1e-8:
+        return [{"t1": 1, "t2": 0, "T_norm": float(np.linalg.norm(a1)),
+                 "strain": 0.0}]
+    if abs(dot_Ch_a2) < 1e-8:
+        return [{"t1": 0, "t2": 1, "T_norm": float(np.linalg.norm(a2)),
+                 "strain": 0.0}]
+
+    target = -dot_Ch_a2 / dot_Ch_a1
+    out: list[dict] = []
+    best = float("inf")
+    for t2 in _bounded_denominators(target, limit):
+        t1_ideal = round(target * t2)
+        for t1 in (t1_ideal - 1, t1_ideal, t1_ideal + 1):
+            if t1 == 0:
+                continue
+            g = _gcd(abs(t1), abs(t2))
+            t1r, t2r = (t1 // g, t2 // g) if g > 1 else (t1, t2)
+            T = t1r * a1 + t2r * a2
+            T_norm = float(np.linalg.norm(T))
+            if T_norm < 1e-12:
+                continue
+            err = abs(float(np.dot(Ch, T))) / (Ch_norm * T_norm)
+            if err < best - 1e-15:
+                best = err
+                out.append({"t1": int(t1r), "t2": int(t2r),
+                            "T_norm": T_norm, "strain": err * 100.0})
+        if best < 1e-12:
+            break
+    return out
+
+
 def _search_T(
     n: int, m: int, a1: np.ndarray, a2: np.ndarray,
     limit: int = 300,
+    max_strain: float | None = None,
+    max_T_norm: float | None = None,
 ) -> tuple[int, int, float]:
     """Best integer (t1, t2) minimising |Ch . T| / (|Ch| . |T|).
+
+    With ``max_strain`` (per cent) the choice inverts: the SHORTEST cell whose
+    residual is within tolerance, rather than the smallest residual whatever
+    the length.  ``max_T_norm`` caps the length in angstroms instead.  Both
+    read the front from :func:`T_options`; neither is on by default, so the
+    unconstrained answer is unchanged.
 
     Same criterion and same tie-breaking as :func:`_search_T_scan`, evaluated
     only where a record is possible.  Searching (t1, t2) as a pair is not
@@ -319,6 +383,20 @@ def _search_T(
         return 1, 0, 0.0
     if abs(dot_Ch_a2) < 1e-8:
         return 0, 1, 0.0
+
+    if max_strain is not None or max_T_norm is not None:
+        front = T_options(n, m, a1, a2, limit)
+        pick = None
+        if max_strain is not None:
+            # Cheapest cell that is good enough.  The front is ordered by
+            # length, so the first hit is the shortest.
+            pick = next((c for c in front if c["strain"] <= max_strain), None)
+        if pick is None and max_T_norm is not None:
+            fits = [c for c in front if c["T_norm"] <= max_T_norm]
+            pick = fits[-1] if fits else None
+        if pick is None:
+            pick = front[-1]          # nothing satisfies it: the best there is
+        return pick["t1"], pick["t2"], pick["strain"] / 100.0
 
     target = -dot_Ch_a2 / dot_Ch_a1
 
@@ -364,6 +442,8 @@ def compute_chirality(
     m: int,
     structure: LatticeStructure,
     search_limit: int = 300,
+    max_strain: float | None = None,
+    max_T_norm: float | None = None,
 ) -> ChiralityResult | None:
     """
     Compute the full chirality description for index pair (n, m).
@@ -372,6 +452,13 @@ def compute_chirality(
     ----------
     n, m         : chiral indices
     structure    : LatticeStructure from core.io
+    max_strain   : per cent. Trade exactness for a shorter cell: return the
+                   SHORTEST T whose periodicity residual is within this
+                   tolerance instead of the most exact one. On AgBr3 (4,1),
+                   0.1 %% buys 432 atoms in a 53.7 A cell where the exact
+                   answer needs 12 208 atoms in 1518 A.
+    max_T_norm   : angstroms. Cap the cell length instead, taking the best
+                   residual that fits.
     search_limit : bound on |t2|, the denominator of the ratio t1/t2 that
                    approximates perpendicularity. Not an iteration count: the
                    search evaluates only the O(log search_limit) candidates
@@ -390,7 +477,8 @@ def compute_chirality(
     # _exact_hexagonal_T (Dresselhaus formula) only works for γ=60° convention;
     # _search_T handles γ=60°, γ=120°, rectangular, and oblique correctly,
     # and returns strain≈0 for lattices with an exact perpendicular T.
-    t1, t2, strain = _search_T(n, m, a1, a2, limit=search_limit)
+    t1, t2, strain = _search_T(n, m, a1, a2, limit=search_limit,
+                               max_strain=max_strain, max_T_norm=max_T_norm)
 
     Ch_vec = n * a1 + m * a2
     T_vec  = t1 * a1 + t2 * a2

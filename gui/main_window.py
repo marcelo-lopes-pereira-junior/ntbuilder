@@ -260,7 +260,13 @@ class MainWindow(QMainWindow):
 
         try:
             self.statusBar().showMessage(f"Computing chirality for ({n},{m})…")
-            chirality = compute_chirality(n, m, self._structure)
+            # Read the tolerance off the panel rather than widening the
+            # build_requested signal, which three other places emit.
+            tol = None
+            if hasattr(self.input_panel, "max_strain"):
+                tol = self.input_panel.max_strain()
+            chirality = compute_chirality(n, m, self._structure,
+                                          max_strain=tol)
             if chirality is None:
                 QMessageBox.warning(self, "Invalid indices",
                                     "n = m = 0 is not a valid nanotube.")
@@ -348,7 +354,9 @@ class MainWindow(QMainWindow):
                 plan_scaled_walls, build_mwnt_scaled, scaled_mwnt_warning,
             )
 
-            inner_ch = compute_chirality(n, m, self._structure)
+            tol = (self.input_panel.max_strain()
+                   if hasattr(self.input_panel, "max_strain") else None)
+            inner_ch = compute_chirality(n, m, self._structure, max_strain=tol)
             if inner_ch is None:
                 QMessageBox.warning(self, "Invalid indices",
                                     "n = m = 0 is not valid.")
