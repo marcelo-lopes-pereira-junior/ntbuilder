@@ -1,6 +1,7 @@
 # Core — required
 numpy>=1.24
 scipy>=1.10
+spglib>=2.0        # primitive-cell reduction, same results as the web builder
 
 # GUI — required for the desktop interface
 PyQt6>=6.5

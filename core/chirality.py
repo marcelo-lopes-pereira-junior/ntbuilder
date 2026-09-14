@@ -180,9 +180,10 @@ def _search_T_scan(
     for t2 in range(1, limit + 1):
         t1 = round(target * t2)
         if t1 == 0:
-            # T = t2·a2 only works if dot_Ch_a2 ≈ 0 (handled above).
-            # Here it means rounding collapsed to 0; try ±1 instead.
-            candidates = [(-1, t2), (1, t2)]
+            # T = t2·a2 is a legitimate candidate even when it is not exactly
+            # perpendicular: on AgBr3 (5,4) it is the best one, and skipping it
+            # returned a 1496-cell T at 0.37 % instead of a2 at 0.24 %.
+            candidates = [(-1, t2), (0, t2), (1, t2)]
         else:
             T      = t1 * a1 + t2 * a2
             T_norm = np.linalg.norm(T)
@@ -198,8 +199,6 @@ def _search_T_scan(
             candidates = [(t1 - 1, t2), (t1 + 1, t2)]
 
         for t1_alt, t2_alt in candidates:
-            if t1_alt == 0:
-                continue
             T_alt      = t1_alt * a1 + t2_alt * a2
             T_norm_alt = np.linalg.norm(T_alt)
             if T_norm_alt < 1e-12:
@@ -237,19 +236,30 @@ def _search_T_scan(
 # Fast path: the candidates a bounded search can possibly win at
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _bezout(a: int, b: int) -> tuple[int, int]:
+    """x, y with a*x + b*y = gcd(a, b), for a, b >= 0."""
+    x0, y0, x1, y1 = 1, 0, 0, 1
+    while b:
+        q = a // b
+        a, b = b, a - q * b
+        x0, x1 = x1, x0 - q * x1
+        y0, y1 = y1, y0 - q * y1
+    return x0, y0
+
+
 def _bounded_denominators(x: float, limit: int) -> list[int]:
-    """Every t2 <= limit at which the approximation of x can set a new record.
+    """The t2 <= limit among which the best approximation under that limit lies.
 
     Perpendicularity fixes t1 for a given t2 -- the best integer is
     round(x*t2) -- so choosing T is choosing a denominator, and since |T| grows
     with t2 the criterion |Ch.T|/(|Ch||T|) is, to leading order, |x - t1/t2|.
-    Its record holders are the convergents of the continued fraction of x plus,
-    at each level, the semiconvergent with the largest multiplier that still
-    fits under the bound; nothing else can win.  A sweep over every t2 spends
-    O(limit) steps to visit O(log limit) useful ones: on biphenylene (4,1) the
-    sweep's 15 record holders are exactly [1, 4, 5, 24, 29, 53, 82, 135, 352,
-    1191, 1543, 5820, 13183, 32186, 45369], and this recursion lists them in
-    15 steps.
+    The best one under a bound is a convergent of the continued fraction of x
+    or, at the last level, the semiconvergent with the largest multiplier that
+    still fits; this list holds those, O(log limit) of them, and matched the
+    full sweep's answer in 1440 of 1440 test cases.  It is NOT the list of
+    records as t2 grows: on biphenylene (4,1) the sweep to 2000 also sets
+    records at t2 = 2, 3, 14, 19, 217 and 839.  For the whole trade-off front
+    see :func:`T_options`.
 
     a0 = floor(x) belongs to the NUMERATOR: the denominator recursion starts at
     a1, from the reciprocal of the fractional part.  Started at a0 the list
@@ -289,58 +299,159 @@ def _bounded_denominators(x: float, limit: int) -> list[int]:
     return sorted({t for t in out if 1 <= t <= limit})
 
 
+def _iter_first_kind_denominators(x: float, limit: int):
+    """The same denominators, ascending, one at a time.
+
+    The list form materialises every denominator up to ``limit``, and the
+    limit is not small when the caller allows an approximate cell: a nearly
+    hexagonal oblique lattice (C2DB 2ZrCl2S2-1, a = 6.512 A, b = 6.795 A)
+    reaches ten million there, and the eager version then asked for tens of
+    gigabytes and was killed by the node.  Generating them ascending lets the
+    caller stop at the first cell that is good enough, which is all
+    :func:`_search_T` ever wanted.
+
+    Ascending order is a property of the recursion, not of a sort: within a
+    level j*q_k + q_{k-1} grows with j, and the last of level k, q_{k+1}, is
+    smaller than the first of level k+1, q_{k+1} + q_k.
+    """
+    yield 1                                   # q_0
+    x = abs(float(x))
+    frac = x - math.floor(x)
+    if frac <= 1e-13:
+        return
+    x = 1.0 / frac
+    q_prev, q = 0, 1                          # q_{-1}, q_0
+    for _ in range(64):
+        a = math.floor(x)
+        if a < 1:
+            break
+        j = 1
+        while j <= a:
+            t = j * q + q_prev
+            if t > limit:
+                break
+            if t != 1:                        # q_0 already yielded
+                yield t
+            j += 1
+        q_next = int(a) * q + q_prev
+        if q_next > limit:
+            break
+        frac = x - a
+        if frac <= 1e-13:                     # exact hit, or float noise
+            break
+        q_prev, q = q, q_next
+        x = 1.0 / frac
+
+
+def _first_kind_denominators(x: float, limit: int) -> list[int]:
+    """Denominators <= limit of every best approximation of x of the first kind.
+
+    A best approximation of the first kind -- p/q with |x - p/q| smaller than
+    for any smaller denominator -- is always a convergent or an intermediate
+    fraction j*q_k + q_{k-1} (j = 1..a_{k+1}) of the continued fraction of x.
+    All of them are listed, those below the halfway rule too; the caller's
+    Pareto filter drops what does not win.  Convergents alone are not enough:
+    for biphenylene (5,6) they jumped from 66 atoms to 14 484 and skipped the
+    fractions k/(k+1) in between, every one of them on the front.
+    """
+    return sorted(set(_iter_first_kind_denominators(x, limit)))
+
+
 def T_options(
     n: int, m: int, a1: np.ndarray, a2: np.ndarray,
     limit: int = 300,
+    *,
+    max_cells: int | None = None,
+    stop_strain: float | None = None,
 ) -> list[dict]:
-    """The trade-off front between cell length and periodicity residual.
+    """The trade-off front between cell size and periodicity residual.
 
-    Every candidate that can hold the record, cheapest cell first.  Each entry
-    is ``{t1, t2, T_norm, strain}`` with strain in per cent, and the list is a
-    Pareto front: |T| grows down it and the residual falls.
+    Every cell no cheaper cell beats, cheapest first.  Each entry is
+    ``{t1, t2, T_norm, strain}`` with strain in per cent; down the list the
+    number of primitive cells |n*t2 - m*t1| grows and the residual falls.  The
+    front stops at the cost of the cell :func:`_search_T` returns with the same
+    ``limit``, so it ends where the default build does, or better.
 
-    This is not an extra computation -- it is the search itself.  Only the
-    continued-fraction convergents of the ideal ratio can improve on their
-    predecessors, so the candidate list IS the front, with O(log limit)
-    entries instead of thousands.  On the AgBr3 monolayer's (4, 1) it runs
-    from 112 atoms at 64 % down to 12 208 atoms at 0.0004 %, and a user who
-    wants a cell small enough for DFT picks a row rather than hunting for a
-    search_limit that happens to produce it.
+    Why it is exact.  Write Ch = g*Ch' with Ch' primitive, and let T1 be any
+    lattice vector with n'*t2 - m'*t1 = 1.  The vectors of a cell of g*c
+    primitive cells are exactly c*T1 - p*Ch' for integer p: they share the
+    component v = c*v1 across Ch, and along Ch they sit at
+    u = |Ch'|*(c*alpha - p) with alpha = (T1.Ch')/|Ch'|^2.  The residual is
+    |u|/|T| = x/sqrt(1 + x^2) with x = |u|/v, strictly increasing in
+    |alpha - p/c|.  So the front is exactly the best approximations of alpha
+    of the first kind, whose denominators :func:`_first_kind_denominators`
+    lists.  Searching t2 instead, with t1 near its ideal, misses every cheaper
+    cell whose t1 is further off -- 2216 front points over 832 test cases,
+    253 of them under 10 %.
+
+    A user who wants a cell small enough for DFT picks a row rather than
+    hunting for a search_limit that happens to produce it.
+
+    ``max_cells`` and ``stop_strain`` cut the front short: the first stops the
+    enumeration at cells nobody asked for, the second at the first cell whose
+    residual is already within ``stop_strain`` per cent.  The front is built in
+    order of cost, so cutting it short never changes the rows that are
+    returned -- it only stops paying for rows past the answer.  A caller with a
+    tolerance wants exactly one row and the cost of the whole front is not
+    bounded by anything the caller controls: on the nearly hexagonal oblique
+    cell of C2DB 2ZrCl2S2-1 the front to ten million cells asked for tens of
+    gigabytes and the node killed it.
     """
     Ch = n * a1 + m * a2
     Ch_norm = float(np.linalg.norm(Ch))
     if Ch_norm < 1e-12:
         return [{"t1": 0, "t2": 1, "T_norm": float(np.linalg.norm(a2)),
                  "strain": 0.0}]
-    dot_Ch_a1 = float(np.dot(Ch, a1))
-    dot_Ch_a2 = float(np.dot(Ch, a2))
-    if abs(dot_Ch_a1) < 1e-8:
-        return [{"t1": 1, "t2": 0, "T_norm": float(np.linalg.norm(a1)),
-                 "strain": 0.0}]
-    if abs(dot_Ch_a2) < 1e-8:
-        return [{"t1": 0, "t2": 1, "T_norm": float(np.linalg.norm(a2)),
-                 "strain": 0.0}]
+    # No shortcut when Ch is perpendicular to a1 or a2: the exact cell is then
+    # one lattice vector, but a cheaper, approximate cell can still precede it
+    # on the front -- graphene (-1,2) has one -- and the general path finds both.
+    g = _gcd(abs(n), abs(m))
+    np_, mp_ = n // g, m // g
+    # T1: n'*t2 - m'*t1 = 1, from Bezout on |n'|, |m'| with the signs put back.
+    x, y = _bezout(abs(np_), abs(mp_))
+    t2_1 = x * (1 if np_ >= 0 else -1)
+    t1_1 = -y * (1 if mp_ >= 0 else -1)
+    Chp = np_ * a1 + mp_ * a2
+    alpha = float(np.dot(t1_1 * a1 + t2_1 * a2, Chp)) / float(np.dot(Chp, Chp))
 
-    target = -dot_Ch_a2 / dot_Ch_a1
+    td1, td2, _ = _search_T(n, m, a1, a2, limit=limit)
+    c_max = max(1, abs(n * td2 - m * td1) // g)
+    if max_cells is not None:
+        # cells = c*g/h with h = gcd(t1, t2) >= 1, so a cell of at most
+        # max_cells primitive cells never needs c beyond max_cells; the ones
+        # that reduce are the same points reached at a smaller c.
+        c_max = min(c_max, max(1, int(max_cells)))
+
     out: list[dict] = []
     best = float("inf")
-    for t2 in _bounded_denominators(target, limit):
-        t1_ideal = round(target * t2)
-        for t1 in (t1_ideal - 1, t1_ideal, t1_ideal + 1):
-            if t1 == 0:
+    for c in _iter_first_kind_denominators(alpha, c_max):
+        p0 = round(c * alpha)
+        rows = []
+        for p in (p0 - 1, p0, p0 + 1):
+            t1 = c * t1_1 - p * np_
+            t2 = c * t2_1 - p * mp_
+            h = _gcd(abs(t1), abs(t2))
+            if h == 0:
                 continue
-            g = _gcd(abs(t1), abs(t2))
-            t1r, t2r = (t1 // g, t2 // g) if g > 1 else (t1, t2)
-            T = t1r * a1 + t2r * a2
+            t1, t2 = t1 // h, t2 // h
+            if t2 < 0 or (t2 == 0 and t1 < 0):   # same sense as _search_T
+                t1, t2 = -t1, -t2
+            cells = abs(n * t2 - m * t1)
+            if cells == 0:                        # T parallel to Ch: no tube
+                continue
+            T = t1 * a1 + t2 * a2
             T_norm = float(np.linalg.norm(T))
-            if T_norm < 1e-12:
-                continue
             err = abs(float(np.dot(Ch, T))) / (Ch_norm * T_norm)
+            rows.append((cells, err, int(t1), int(t2), T_norm))
+        # Cost grows with c, so the front is this stream in order; a repeat of
+        # a vector already on it comes back with the same residual and the
+        # improvement test drops it, as the old dict keyed by (t1, t2) did.
+        for cells, err, t1r, t2r, T_norm in sorted(rows, key=lambda r: (r[0], r[1])):
             if err < best - 1e-15:
                 best = err
-                out.append({"t1": int(t1r), "t2": int(t2r),
+                out.append({"t1": t1r, "t2": t2r,
                             "T_norm": T_norm, "strain": err * 100.0})
-        if best < 1e-12:
+        if stop_strain is not None and best * 100.0 <= stop_strain:
             break
     return out
 
@@ -350,6 +461,7 @@ def _search_T(
     limit: int = 300,
     max_strain: float | None = None,
     max_T_norm: float | None = None,
+    max_cells: int | None = None,
 ) -> tuple[int, int, float]:
     """Best integer (t1, t2) minimising |Ch . T| / (|Ch| . |T|).
 
@@ -357,7 +469,8 @@ def _search_T(
     residual is within tolerance, rather than the smallest residual whatever
     the length.  ``max_T_norm`` caps the length in angstroms instead.  Both
     read the front from :func:`T_options`; neither is on by default, so the
-    unconstrained answer is unchanged.
+    unconstrained answer is unchanged.  ``max_cells`` bounds the front for a
+    caller that will not take a cell bigger than that anyway.
 
     Same criterion and same tie-breaking as :func:`_search_T_scan`, evaluated
     only where a record is possible.  Searching (t1, t2) as a pair is not
@@ -385,7 +498,8 @@ def _search_T(
         return 0, 1, 0.0
 
     if max_strain is not None or max_T_norm is not None:
-        front = T_options(n, m, a1, a2, limit)
+        front = T_options(n, m, a1, a2, limit, max_cells=max_cells,
+                          stop_strain=max_strain if max_T_norm is None else None)
         pick = None
         if max_strain is not None:
             # Cheapest cell that is good enough.  The front is ordered by
@@ -404,9 +518,10 @@ def _search_T(
     best_t = (1, 1)
     for t2 in _bounded_denominators(target, limit):
         t1_ideal = round(target * t2)
+        # t1 = 0 is not skipped: T = a2 can be the best cell without being
+        # exactly perpendicular (AgBr3 (5,4)); the GCD reduction below turns
+        # any (0, t2) into (0, 1).
         for t1 in (t1_ideal - 1, t1_ideal, t1_ideal + 1):
-            if t1 == 0:
-                continue
             T = t1 * a1 + t2 * a2
             T_norm = float(np.linalg.norm(T))
             if T_norm < 1e-12:
@@ -444,6 +559,7 @@ def compute_chirality(
     search_limit: int = 300,
     max_strain: float | None = None,
     max_T_norm: float | None = None,
+    max_cells: int | None = None,
 ) -> ChiralityResult | None:
     """
     Compute the full chirality description for index pair (n, m).
@@ -459,6 +575,9 @@ def compute_chirality(
                    answer needs 12 208 atoms in 1518 A.
     max_T_norm   : angstroms. Cap the cell length instead, taking the best
                    residual that fits.
+    max_cells    : refuse to look at cells of more primitive cells than this.
+                   A catalogue that will not keep a cell past 50 000 atoms has
+                   no reason to pay for the search that finds a bigger one.
     search_limit : bound on |t2|, the denominator of the ratio t1/t2 that
                    approximates perpendicularity. Not an iteration count: the
                    search evaluates only the O(log search_limit) candidates
@@ -478,7 +597,8 @@ def compute_chirality(
     # _search_T handles γ=60°, γ=120°, rectangular, and oblique correctly,
     # and returns strain≈0 for lattices with an exact perpendicular T.
     t1, t2, strain = _search_T(n, m, a1, a2, limit=search_limit,
-                               max_strain=max_strain, max_T_norm=max_T_norm)
+                               max_strain=max_strain, max_T_norm=max_T_norm,
+                               max_cells=max_cells)
 
     Ch_vec = n * a1 + m * a2
     T_vec  = t1 * a1 + t2 * a2

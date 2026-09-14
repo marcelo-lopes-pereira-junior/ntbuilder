@@ -62,6 +62,18 @@ _SEARCH = 2
 _TOL = 2e-3
 
 
+def _resolve_tol(structure, tol):
+    """The tolerance to test the basis with.
+
+    A structure that came out of a tolerant symmetry search carries the
+    tolerance that search needed in ``sym_tol``; testing it back at the tight
+    default would throw away the symmetry that was just found.
+    """
+    if tol is not None:
+        return tol
+    return float(getattr(structure, "sym_tol", _TOL))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Lattice
 # ─────────────────────────────────────────────────────────────────────────────
@@ -177,7 +189,7 @@ def _maps_onto_itself(U: np.ndarray, frac: np.ndarray, syms: list,
 
 
 def structure_point_group(structure: LatticeStructure,
-                          tol: float = _TOL) -> list[np.ndarray]:
+                          tol: float | None = None) -> list[np.ndarray]:
     """
     The point group of the crystal: the subgroup of the holohedry that the
     atomic basis also respects, up to a translation.
@@ -188,11 +200,42 @@ def structure_point_group(structure: LatticeStructure,
     example: a square lattice (holohedry 4mm) carrying an sp3 basis that
     breaks every mirror, so the crystal is 4 and (5,0) is not (0,5).
     """
+    tol = _resolve_tol(structure, tol)
     frac, syms, zs = _fractional(structure)
     if len(frac) == 0:
         return lattice_point_group(structure)
-    return [U for U in lattice_point_group(structure)
-            if _maps_onto_itself(U, frac, syms, zs, tol)]
+    ok = [U for U in lattice_point_group(structure)
+          if _maps_onto_itself(U, frac, syms, zs, tol)]
+    return _closed_subgroup(ok)
+
+
+def _closed_subgroup(ops: list[np.ndarray]) -> list[np.ndarray]:
+    """The largest subgroup inside a set of operations accepted one by one.
+
+    Each operation is tested on its own against a tolerance, and a slightly
+    distorted cell can pass for U and fail for U @ U: on the C2DB monolayer
+    1CHHfO-1 the test accepted a 3-fold rotation but not its square, leaving
+    four operations that are not a group.  Order 4 plus inversion then gave 8
+    and a 45 degree wedge on a hexagonal lattice, which cannot exist.  Dropping
+    every operation whose inverse or whose product with another is missing, until
+    nothing more can be dropped, leaves a genuine subgroup; the identity is
+    never dropped, so the result is never empty.
+    """
+    def key(U):
+        return tuple(map(tuple, np.asarray(U, dtype=np.int64).tolist()))
+
+    cur = {key(U): np.asarray(U, dtype=np.int64) for U in ops}
+    eye = np.eye(2, dtype=np.int64)
+    cur.setdefault(key(eye), eye)
+    changed = True
+    while changed:
+        changed = False
+        for k, U in list(cur.items()):
+            inv = np.round(np.linalg.inv(U.astype(float))).astype(np.int64)
+            if key(inv) not in cur or any(key(U @ V) not in cur for V in cur.values()):
+                del cur[k]
+                changed = True
+    return list(cur.values())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,7 +243,7 @@ def structure_point_group(structure: LatticeStructure,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def chirality_group(structure: LatticeStructure,
-                    tol: float = _TOL) -> list[np.ndarray]:
+                    tol: float | None = None) -> list[np.ndarray]:
     """
     The group by which two (n, m) pairs may be identified.
 
@@ -221,7 +264,7 @@ def chirality_group(structure: LatticeStructure,
 
 def unique_indices(structure: LatticeStructure, n_max: int,
                    m_max: int | None = None,
-                   tol: float = _TOL) -> list[tuple[int, int]]:
+                   tol: float | None = None) -> list[tuple[int, int]]:
     """
     One representative of every symmetry-distinct (n, m) within the box.
 
@@ -235,6 +278,12 @@ def unique_indices(structure: LatticeStructure, n_max: int,
     """
     if m_max is None:
         m_max = n_max
+    # tol=None usa a tolerância da busca de simetria (structure.sym_tol), a mesma
+    # de chirality_group e sector_deg.  Com o padrão fixo de 2e-3 que havia aqui,
+    # o C2DB 1AlC-1 (gama 119,71 graus) tinha 12 operações no setor de 30 graus
+    # e só 4 na redução dos índices: o mapa mostrava os pontos num leque de 90
+    # graus, fora do setor desenhado, e 7,5 % dos Sistemas 2D do catálogo tinham
+    # (n,m) equivalentes guardados como tubos distintos.
     ops = chirality_group(structure, tol)
     in_box = lambda v: (0 <= v[0] <= n_max and abs(v[1]) <= m_max
                         and not (v[0] == 0 and v[1] <= 0))
@@ -260,7 +309,7 @@ def unique_indices(structure: LatticeStructure, n_max: int,
     return sorted(out)
 
 
-def sector_deg(structure: LatticeStructure, tol: float = _TOL) -> float:
+def sector_deg(structure: LatticeStructure, tol: float | None = None) -> float:
     """
     Opening angle, in degrees, of the symmetry-unique wedge of chiral angles.
 

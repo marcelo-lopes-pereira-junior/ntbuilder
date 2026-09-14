@@ -34,6 +34,88 @@ import numpy as np
 # Data container
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Bravais class of a 2D metric, at a stated tolerance.  Kept as a function so a
+# symmetry search can ask the same question at several tolerances -- the way
+# Materials Studio does -- instead of one hard-wired answer.
+LEN_TOL = 1e-3        # Å, |a| vs |b|
+ANG_TOL = 0.5         # degrees, on gamma
+SYM_RANK = {"hexagonal": 4, "square": 3, "centred rectangular": 2,
+            "rectangular": 2, "oblique": 0}
+
+
+def lattice_type_at(a: float, b: float, gamma_deg: float,
+                    len_tol: float = LEN_TOL, ang_tol: float = ANG_TOL) -> str:
+    """The 2D Bravais class this metric has, within (len_tol, ang_tol)."""
+    same = abs(a - b) <= len_tol
+    if same and (abs(gamma_deg - 60.0) <= ang_tol or abs(gamma_deg - 120.0) <= ang_tol):
+        return "hexagonal"
+    if same and abs(gamma_deg - 90.0) <= ang_tol:
+        return "square"
+    if same:
+        return "centred rectangular"
+    if abs(gamma_deg - 90.0) <= ang_tol:
+        return "rectangular"
+    return "oblique"
+
+
+# Unimodular changes of basis tried by the classifiers: the Gauss-reduced
+# basis, then the two edge sums and differences that turn the reduced basis of a
+# centred rectangular lattice (|2 a.b| = a^2) into its rhombic form (a = b).
+_BASIS_MOVES = ((1, 0, 0, 1), (1, 0, 1, 1), (1, 0, -1, 1), (1, 1, 0, 1), (1, -1, 0, 1))
+
+
+def equivalent_bases(a1, a2) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Other bases of the SAME lattice, as (M, B) with B = M @ [a1; a2].
+
+    The first entry is the basis as given (M = I).  The class of a lattice does
+    not depend on which of its bases a file happens to use, but reading a, b and
+    gamma off one basis does: 1 711 catalogue systems whose lattice is centred
+    rectangular were labelled oblique because their cell had a != b, and the
+    rhombic basis with a = b is one edge sum away.  Only unimodular moves are
+    used, so no supercell or sub-lattice is ever produced.
+    """
+    A = np.array([a1, a2], dtype=float)
+    out = [(np.eye(2, dtype=int), A)]
+    # Gauss (Lagrange) reduction, tracking the integer matrix.
+    R = np.eye(2, dtype=int)
+    B = A.copy()
+    for _ in range(64):
+        if B[0] @ B[0] > B[1] @ B[1]:
+            B = B[::-1].copy()
+            R = R[::-1].copy()
+        mu = int(round(float(B[0] @ B[1]) / float(B[0] @ B[0])))
+        if mu == 0:
+            break
+        B[1] = B[1] - mu * B[0]
+        R[1] = R[1] - mu * R[0]
+    for a, b, c, d in _BASIS_MOVES:
+        M = np.array([[a, b], [c, d]], dtype=int) @ R
+        out.append((M, M @ A))
+    return out
+
+
+def _metric(B: np.ndarray) -> tuple[float, float, float]:
+    a, b = float(np.linalg.norm(B[0])), float(np.linalg.norm(B[1]))
+    cosg = float(B[0] @ B[1]) / (a * b) if a > 0 and b > 0 else 0.0
+    return a, b, math.degrees(math.acos(max(-1.0, min(1.0, cosg))))
+
+
+def lattice_class(a1, a2, len_tol: float = LEN_TOL,
+                  ang_tol: float = ANG_TOL) -> tuple[str, np.ndarray]:
+    """The highest Bravais class any basis of this lattice shows, and that basis.
+
+    Returns (class, M).  Ties keep the basis as given, so a cell that already
+    shows its class is never re-expressed.
+    """
+    best = None
+    for k, (M, B) in enumerate(equivalent_bases(a1, a2)):
+        lt = lattice_type_at(*_metric(B), len_tol=len_tol, ang_tol=ang_tol)
+        key = (SYM_RANK[lt], k == 0)
+        if best is None or key > best[0]:
+            best = (key, lt, M)
+    return best[1], best[2]
+
+
 class LatticeStructure:
     """
     Holds the 2D unit cell of a layered material.
@@ -139,8 +221,10 @@ class LatticeStructure:
         cosmetic — the square lattice always closes an exact T, and the
         rhombic one closes its two DIAGONALS while its axes do not.
 
-        This classifies the cell **as given**, not the lattice it may be a
-        non-primitive setting of.  The conventional centred rectangular cell
+        The class is that of the LATTICE, whichever of its bases the cell uses:
+        a centred rectangular lattice written with a != b is still centred
+        rectangular (see :func:`equivalent_bases`).  It is not that of a lattice
+        the cell may be a non-primitive setting of.  The conventional centred rectangular cell
         is a rectangle with a lattice point at its centre, and read as a
         metric alone that is 'rectangular': CrPS₄'s experimental cell,
         10.871 × 7.254 Å at 90°, is the centred setting of the rhombic
@@ -148,17 +232,7 @@ class LatticeStructure:
         :func:`core.symmetry.find_primitive_cell` is what turns one into the
         other.
         """
-        g = self.gamma_deg
-        same = abs(self.a - self.b) < 1e-3
-        if same and (abs(g - 60) < 0.5 or abs(g - 120) < 0.5):
-            return "hexagonal"
-        if same and abs(g - 90) < 0.5:
-            return "square"
-        if same:
-            return "centred rectangular"
-        if abs(g - 90) < 0.5:
-            return "rectangular"
-        return "oblique"
+        return lattice_class(self.a1, self.a2)[0]
 
     @property
     def is_square(self) -> bool:

@@ -5,11 +5,13 @@ Constructs the 3D nanotube from a LatticeStructure and a ChiralityResult.
 
 Algorithm
 ---------
-1. Tile the 2D unit cell over a supercell large enough to cover at least
-   one full (Ch × T) unit cell of the nanotube.
-2. Project each atom onto the Ch and T axes using dot products.
-3. Keep only atoms whose (u, v) coordinates satisfy:
-       0 ≤ u < |Ch|  and  0 ≤ v < |T|
+1. Enumerate the lattice sites that fall in one nanotube unit cell: the
+   parallelogram spanned by Ch and T in the sheet.
+2. Give each site its fractional coordinates (s, w) in the (Ch, T) basis and
+   keep those with 0 ≤ s < 1 and 0 ≤ w < 1; set u = s·|Ch| and v = w·|T|.
+   For an exact T (perpendicular to Ch) these are the plain projections onto
+   the two axes; for an approximate T they are not, and projections would cut
+   the wrong region (see _iter_atoms).
 4. Roll: map the circumferential coordinate u → (x, y) on a cylinder.
    • For flat structures: radius R = |Ch| / 2π (all atoms at same r).
    • For buckled / multi-layer structures: each atom's radial distance is
@@ -90,93 +92,115 @@ class NanotubeStructure:
 # Builder
 # ─────────────────────────────────────────────────────────────────────────────
 
-_TOL_LO = 1e-4   # lower-boundary inclusion tolerance (v ≥ -_TOL_LO)
-_TOL_HI = 5e-4   # upper-boundary exclusion tolerance (v < ceil - _TOL_HI)
-                 # Larger than _TOL_LO to catch floating-point images that land
-                 # just below the upper boundary due to rounding.
+_TOL = 1e-4   # Å.  A site this close below a cell boundary counts as ON it.
+              # The SAME shift at both ends of the half-open window keeps
+              # exactly one image of every site.  The previous asymmetric pair
+              # (1e-4 below, 5e-4 above) dropped any site that landed between
+              # the two, together with its image.
+
+
+def _index_range(k: int, c: float, lo: float, hi: float,
+                 fallback: tuple[int, int]) -> tuple[int, int]:
+    """Integers i with lo <= (k*i + c) < hi as a padded half-open range.
+
+    ``k`` is an integer coefficient; when it is 0 the condition does not
+    depend on i and the row is either empty or given by ``fallback``.  The
+    range is padded by one on each side -- the caller checks every i exactly.
+    """
+    if k == 0:
+        return fallback if lo <= c < hi else (0, 0)
+    a, b = (lo - c) / k, (hi - c) / k
+    if k < 0:
+        a, b = b, a
+    return math.floor(a) - 1, math.ceil(b) + 2
 
 
 def _iter_atoms(
     structure: LatticeStructure,
     chirality: ChiralityResult,
-    margin: int,
 ) -> Iterator[tuple[str, float, float, float]]:
-    """
-    Yield (symbol, u_coord, v_coord, z_offset) for every atom in the nanotube
-    unit cell.
+    """Yield (symbol, u, v, z_offset) for every atom of one nanotube unit cell."""
+    Ch_norm, T_norm = chirality.Ch_norm, chirality.T_norm
+    for _k, sym, s, w, _x, _y, z_off in _iter_sites(structure, chirality):
+        yield sym, s * Ch_norm, w * T_norm, z_off
 
-    Uses analytic i-bounds for each (j, atom) pair so the supercell is never
-    materialised as a 2D array.  Memory complexity is O(n_atoms_output) instead
-    of O(margin²), making arbitrarily large unit cells feasible.
+
+def _iter_sites(
+    structure: LatticeStructure,
+    chirality: ChiralityResult,
+) -> Iterator[tuple[int, str, float, float, float, float, float]]:
     """
-    a1, a2  = structure.a1, structure.a2
+    Yield (k, symbol, s, w, x, y, z_offset) for every atom of one nanotube
+    unit cell: k is the atom of the 2D cell it comes from and (x, y) its
+    lattice-index coordinates in the sheet, so each tube atom keeps its
+    identity in the flat layer (what check_curvature_bonds compares).
+
+    The cell is the parallelogram spanned by Ch and T in the sheet.  A site
+    belongs to it when its fractional coordinates (s, w) in the (Ch, T) basis
+    lie in [0, 1), and u = s*|Ch|, v = w*|T| are returned, so the roll sends
+    Ch onto the whole circumference and T onto the axial period exactly.
+
+    For an exact T, perpendicular to Ch, this is the rectangle 0 <= u < |Ch|,
+    0 <= v < |T| of plain projections, which is how the cell used to be cut.
+    For an approximate T it is not: projections onto two oblique axes cut a
+    region 1/sin^2(Ch, T) times the cell, so sites were repeated -- 184 atoms
+    instead of 6, down to 0.13 A apart, on biphenylene (5,6) with t = (1,1) --
+    and the tube had a seam.  Fractional coordinates hold exactly
+    n_atoms_cell * |n*t2 - m*t1| atoms, each once, with no seam; the cost of
+    the approximation becomes a uniform shear of the sheet, the residual that
+    is reported as strain.
+
+    With x = i + f1 and y = j + f2 the lattice-index coordinates of a site,
+        s = (x*t2 - y*t1) / D,   w = (n*y - m*x) / D,   D = n*t2 - m*t1,
+    both linear in i, so each row j gets analytic bounds on i and the
+    supercell is never materialised.
+    """
+    a1, a2 = structure.a1, structure.a2
+    n, m = chirality.n, chirality.m
+    t1, t2 = chirality.t1, chirality.t2
+    D = n * t2 - m * t1
+    if D == 0:
+        raise ValueError(
+            f"T = ({t1},{t2}) is parallel to Ch = ({n},{m}): no nanotube cell.")
     Ch_norm = chirality.Ch_norm
     T_norm  = chirality.T_norm
-    u_hat   = chirality.Ch_vec / Ch_norm
-    v_hat   = chirality.T_vec  / T_norm
+    lo_s, hi_s = -_TOL / Ch_norm, 1.0 - _TOL / Ch_norm
+    lo_w, hi_w = -_TOL / T_norm,  1.0 - _TOL / T_norm
 
-    # Scalar projections of lattice vectors onto the nanotube axes
-    a1_u = float(a1 @ u_hat)
-    a1_v = float(a1 @ v_hat)
-    a2_u = float(a2 @ u_hat)
-    a2_v = float(a2 @ v_hat)
+    # The cell's corners in index space bound the rows and columns to visit.
+    xs = (0, n, t1, n + t1)
+    ys = (0, m, t2, m + t2)
+    x_range = (min(xs) - 2, max(xs) + 3)
+    j_lo, j_hi = min(ys) - 2, max(ys) + 2
 
-    for atom in structure.atoms:
+    basis = np.column_stack([a1, a2])
+
+    for k, atom in enumerate(structure.atoms):
         sym   = atom["symbol"]
-        pos   = atom["pos"]
         z_off = atom.get("z", 0.0)
-        p_u   = float(pos @ u_hat)
-        p_v   = float(pos @ v_hat)
+        f1, f2 = (float(f) for f in np.linalg.lstsq(
+            basis, np.asarray(atom["pos"], dtype=float), rcond=None)[0])
 
-        for j in range(-margin, margin + 1):
-            # Contributions from j and the atom offset
-            ju = j * a2_u + p_u
-            jv = j * a2_v + p_v
-
-            # ── Analytic i-bounds from the u-constraint ───────────────────────
-            # -_TOL_LO ≤ i*a1_u + ju < Ch_norm - _TOL_HI
-            if abs(a1_u) > 1e-12:
-                lo_u = (-_TOL_LO - ju) / a1_u
-                hi_u = (Ch_norm - _TOL_HI - ju) / a1_u
-                if a1_u > 0:
-                    i_lo_u = math.ceil(lo_u  - 1e-9)
-                    i_hi_u = math.floor(hi_u + 1e-9) + 1   # exclusive
-                else:
-                    i_lo_u = math.ceil(hi_u  - 1e-9)
-                    i_hi_u = math.floor(lo_u + 1e-9) + 1
+        for j in range(j_lo, j_hi + 1):
+            y = j + f2
+            # s = (t2*i + cs)/D and w = (-m*i + cw)/D
+            cs = f1 * t2 - y * t1
+            cw = n * y - m * f1
+            if D > 0:
+                r_s = _index_range(t2, cs, lo_s * D, hi_s * D, x_range)
+                r_w = _index_range(-m, cw, lo_w * D, hi_w * D, x_range)
             else:
-                # a1_u ≈ 0: u independent of i — skip row if out of range
-                if not (-_TOL_LO <= ju < Ch_norm - _TOL_HI):
-                    continue
-                i_lo_u, i_hi_u = -margin, margin + 1
+                # Dividing by a negative D flips both inequalities.
+                r_s = _index_range(-t2, -cs, lo_s * -D, hi_s * -D, x_range)
+                r_w = _index_range(m, -cw, lo_w * -D, hi_w * -D, x_range)
 
-            # ── Analytic i-bounds from the v-constraint ───────────────────────
-            # -_TOL_LO ≤ i*a1_v + jv < T_norm - _TOL_HI
-            if abs(a1_v) > 1e-12:
-                lo_v = (-_TOL_LO - jv) / a1_v
-                hi_v = (T_norm - _TOL_HI - jv) / a1_v
-                if a1_v > 0:
-                    i_lo_v = math.ceil(lo_v  - 1e-9)
-                    i_hi_v = math.floor(hi_v + 1e-9) + 1
-                else:
-                    i_lo_v = math.ceil(hi_v  - 1e-9)
-                    i_hi_v = math.floor(lo_v + 1e-9) + 1
-            else:
-                if not (-_TOL_LO <= jv < T_norm - _TOL_HI):
-                    continue
-                i_lo_v, i_hi_v = -margin, margin + 1
-
-            # Intersect the two ranges with the overall margin guard
-            i_lo = max(i_lo_u, i_lo_v, -margin)
-            i_hi = min(i_hi_u, i_hi_v, margin + 1)
-
-            for i in range(i_lo, i_hi):
-                u = i * a1_u + ju
-                v = i * a1_v + jv
-                # Final exact check using asymmetric tolerances
-                if (-_TOL_LO <= u < Ch_norm - _TOL_HI and
-                        -_TOL_LO <= v < T_norm  - _TOL_HI):
-                    yield sym, u, v, z_off
+            for i in range(max(r_s[0], r_w[0], x_range[0]),
+                           min(r_s[1], r_w[1], x_range[1])):
+                x = i + f1
+                s = (x * t2 - y * t1) / D
+                w = (n * y - m * x) / D
+                if lo_s <= s < hi_s and lo_w <= w < hi_w:
+                    yield k, sym, s, w, x, y, z_off
 
 
 def build_nanotube(
@@ -208,19 +232,12 @@ def build_nanotube(
     # +1 → z>0 atoms go outward; -1 → z>0 atoms go inward
     roll_sign = -1.0 if roll_inward else +1.0
 
-    # Supercell margin — guarantees the iterator covers at least one full
-    # (Ch × T) unit cell regardless of the lattice geometry.
-    margin = max(
-        abs(chirality.n) + abs(chirality.t1),
-        abs(chirality.m) + abs(chirality.t2),
-    ) + 3
-
     sym_out: list[str]   = []
     x_out:   list[float] = []
     y_out:   list[float] = []
     z_out:   list[float] = []
 
-    for sym, u, v, z_off in _iter_atoms(structure, chirality, margin):
+    for sym, u, v, z_off in _iter_atoms(structure, chirality):
         r_atom = radius + roll_sign * z_off
         angle  = u / radius          # circumferential → azimuthal angle
         sym_out.append(sym)
@@ -264,11 +281,15 @@ def build_nanotube(
 # Bond validation
 # ─────────────────────────────────────────────────────────────────────────────
 
+SPURIOUS_MIN_SHORTENING = 0.10
+
+
 def check_spurious_bonds(
     structure:  LatticeStructure,
     nt:         NanotubeStructure,
     tolerance:  float = 1.20,
     settings:   "BondSettings | None" = None,
+    min_shortening: float = SPURIOUS_MIN_SHORTENING,
 ) -> set[frozenset]:
     """
     Detect bonds in the 3D nanotube that do not exist in the flat 2D structure.
@@ -277,12 +298,28 @@ def check_spurious_bonds(
     element symbols, e.g. {frozenset({'S', 'S'})} for a spurious S–S bond.
     An empty set means no spurious bonds were found.
 
+    A species pair is spurious when, in the tube, it comes within the bond
+    cutoff (``tolerance`` times the sum of covalent radii) although it is not
+    bonded in the flat sheet, AND its shortest distance in the tube is at least
+    ``min_shortening`` (a fraction) below its shortest distance in the flat
+    sheet.  The second condition is a hysteresis on the cutoff.  Without it a
+    pair that already sits just outside the cutoff in the sheet is flagged by
+    any curvature at all: in C2DB's Fe2Mo2F2O8 the Fe-Mo pair across the
+    Fe-O-Mo bridge is 3.71 A in the sheet against a 3.67 A cutoff, and every
+    one of its 125 tubes was flagged, the (17,2) tube of D = 36.6 A for a
+    3.5 % squeeze.  With 10 % the gentle squeezes are released (115 of those
+    125 tubes, and 10.4 % of a random sample of 250 flagged catalogue tubes)
+    while real contacts stay flagged: the median flagged pair is 26 % shorter
+    than in the sheet, and the (3,1) tube of Fe2Mo2F2O8 is at -21 %.
+    ``min_shortening=0`` restores the plain cutoff test.
+
     Parameters
     ----------
     structure : original flat 2D unit cell
     nt        : built 3D nanotube
     tolerance : bond-detection tolerance factor (used when settings=None)
     settings  : optional BondSettings for per-pair cutoffs (takes precedence)
+    min_shortening : fraction the pair must shorten relative to the sheet
     """
     from .connectivity import compute_bonds, BondSettings as _BS
 
@@ -311,13 +348,229 @@ def check_spurious_bonds(
     for i, j in flat_bonds:
         flat_species_pairs.add(frozenset([supercell_syms[i], supercell_syms[j]]))
 
-    # ── 3D bonds ─────────────────────────────────────────────────────────────
-    nt_coords_centered = nt.coords - nt.coords.mean(axis=0)
-    nt_bonds = compute_bonds(nt_coords_centered, list(nt.symbols),
-                             tolerance=tolerance, settings=settings)
-    nt_species_pairs: set[frozenset] = set()
-    for i, j in nt_bonds:
-        nt_species_pairs.add(frozenset([nt.symbols[i], nt.symbols[j]]))
+    def flat_min_distance(pair: frozenset) -> float:
+        """Shortest distance of this species pair in the sheet (periodic in-plane)."""
+        from scipy.spatial import cKDTree
+        a_, b_ = (tuple(pair) * 2)[:2]
+        sc_syms = np.array(supercell_syms)
+        ia = np.where(np.array(flat_syms) == a_)[0]
+        ib = np.where(sc_syms == b_)[0]
+        if len(ia) == 0 or len(ib) == 0:
+            return float("inf")
+        # A wider supercell for the reference distance than for the bonds: a
+        # long cell edge can put the nearest image beyond the 3 x 3 block.
+        big, big_syms = [], []
+        for di in range(-2, 3):
+            for dj in range(-2, 3):
+                shift = di * np.array([a1[0], a1[1], 0.0]) + dj * np.array([a2[0], a2[1], 0.0])
+                big.append(flat_coords + shift)
+                big_syms.extend(flat_syms)
+        big = np.vstack(big)
+        jb = np.where(np.array(big_syms) == b_)[0]
+        d, _ = cKDTree(big[jb]).query(flat_coords[ia], k=min(2, len(jb)))
+        d = np.atleast_2d(d)
+        d = d[d > 0.4]
+        return float(d.min()) if d.size else float("inf")
 
-    # ── Spurious = in 3D but not in 2D ───────────────────────────────────────
-    return nt_species_pairs - flat_species_pairs
+    # ── 3D bonds, periodic along the tube axis ───────────────────────────────
+    # The tube repeats along z with period box[2].  Searching one cell on its
+    # own misses every close pair that straddles the cell boundary, and where
+    # that boundary falls depends on how the sheet was cut: in the nanotube
+    # catalogue, 2 727 tubes that are identical in both rolling senses got
+    # different spurious-bond verdicts for the two cuts, and 58 of 60 of those
+    # agree once the neighbouring cells are searched too.  Enough images are
+    # added to cover the longest bond the cutoffs allow, since a short cell
+    # (T of 2.5 A against a 6 A cutoff) needs more than one on each side.
+    from .connectivity import get_radius
+    X = np.asarray(nt.coords, dtype=float)
+    syms = list(nt.symbols)
+    N = len(syms)
+    Lz = float(nt.box[2])
+    if settings is not None:
+        tol_scale = settings.tolerance
+    else:
+        tol_scale = tolerance
+    reach = 2.0 * max(get_radius(sy) for sy in set(syms)) * tol_scale
+    if settings is not None and getattr(settings, "pair_cutoffs", None):
+        reach = max([reach] + [float(v) for v in settings.pair_cutoffs.values()])
+    k_img = max(1, int(np.ceil(reach / Lz))) if Lz > 1e-9 else 0
+    # The original cell first, so that index < N means "an atom of this cell".
+    order = [0] + [k for k in range(-k_img, k_img + 1) if k != 0]
+    blocks = [X + np.array([0.0, 0.0, k * Lz]) for k in order]
+    aug = np.vstack(blocks)
+    nt_bonds = compute_bonds(aug, syms * len(blocks), tolerance=tolerance, settings=settings)
+    shortest: dict[frozenset, float] = {}
+    for i, j in nt_bonds:
+        if i < N or j < N:                    # at least one atom of the cell itself
+            pair = frozenset([syms[i % N], syms[j % N]])
+            d = float(np.linalg.norm(aug[i] - aug[j]))
+            shortest[pair] = min(d, shortest.get(pair, float("inf")))
+
+    # ── Spurious = bonded in 3D, not in 2D, and genuinely shortened ──────────
+    spurious: set[frozenset] = set()
+    for pair, d_tube in shortest.items():
+        if pair in flat_species_pairs:
+            continue
+        if min_shortening > 0:
+            d_flat = flat_min_distance(pair)
+            if d_tube > (1.0 - min_shortening) * d_flat:
+                continue
+        spurious.add(pair)
+    return spurious
+
+
+CURVATURE_MIN_CHANGE = 0.10
+
+
+def tube_sites(structure: LatticeStructure, chirality: ChiralityResult) -> tuple[np.ndarray, ...]:
+    """(k, s, w, x, y) arrays of one tube cell, in build_nanotube's atom order."""
+    rows = [(k, s, w, x, y) for k, _sym, s, w, x, y, _z in _iter_sites(structure, chirality)]
+    if not rows:
+        raise RuntimeError(f"No atoms selected for ({chirality.n},{chirality.m}).")
+    k, s, w, x, y = (np.array(c) for c in zip(*rows))
+    return k.astype(np.int64), s, w, x, y
+
+
+def _roll_sites(structure, chirality, s, w, z_off, roll_inward):
+    """Cartesian positions of sheet points (s, w, z) after rolling, axis at the origin."""
+    R = chirality.Ch_norm / (2.0 * np.pi)
+    r = R + (-1.0 if roll_inward else 1.0) * z_off
+    ang = 2.0 * np.pi * s
+    return np.column_stack([r * np.cos(ang), r * np.sin(ang), w * chirality.T_norm])
+
+
+def check_curvature_bonds(
+    structure:   LatticeStructure,
+    chirality:   ChiralityResult,
+    roll_inward: bool = False,
+    tolerance:   float = 1.20,
+    settings:    "BondSettings | None" = None,
+    min_change:  float = CURVATURE_MIN_CHANGE,
+    sites:       "tuple[np.ndarray, ...] | None" = None,
+) -> tuple[set[frozenset], set[frozenset]]:
+    """
+    Bonds that rolling forms and breaks, compared atom by atom with the sheet.
+
+    Returns (formed, broken), each a set of species pairs.  Every tube atom
+    keeps its identity in the flat layer (the 2D-cell atom and the lattice
+    cell it comes from), so every pair of atoms has a distance in the sheet,
+    d_flat, and one in the tube, d_tube, with the same bond cutoff of
+    compute_bonds (``tolerance`` times the sum of covalent radii):
+
+    * formed: d_tube is below the cutoff, d_flat is not, and d_tube is at least
+      ``min_change`` shorter than d_flat;
+    * broken: d_flat is below the cutoff, d_tube is not, and d_tube is at least
+      ``min_change`` longer than d_flat.
+
+    The margin is the same hysteresis as check_spurious_bonds, now per pair
+    of atoms and in both directions.  check_spurious_bonds sees neither a
+    broken bond nor a new bond of a species pair that is bonded elsewhere in
+    the sheet; both are curvature artefacts all the same.  A tube pair that
+    comes closer than the minimum bond length counts as formed, not as
+    "no bond".
+
+    The comparison is analytic in the sheet coordinates: a flat bond from
+    atom k to atom k' of lattice offset (dx, dy) sends a tube atom at (s, w)
+    to its partner at (s + ds, w + dw), with ds = (dx t2 - dy t1)/D and
+    dw = (n dy - m dx)/D, so no pairs are searched on the seam.  Formed bonds
+    come from a neighbour search in the tube with its axial images, where
+    an image is the lattice shift T and a turn around the tube the shift Ch.
+    ``sites`` (from tube_sites) saves enumerating the cell twice when both
+    senses are checked.
+    """
+    from scipy.spatial import cKDTree
+    from .connectivity import get_radius
+
+    syms = [a["symbol"] for a in structure.atoms]
+    nb = len(syms)
+    zb = np.array([a.get("z", 0.0) for a in structure.atoms], dtype=float)
+    if settings is None:
+        hi = np.array([[(get_radius(a) + get_radius(b)) * tolerance for b in syms] for a in syms])
+        lo = np.full((nb, nb), 0.40)
+    else:
+        hi = np.array([[settings.max_dist(a, b) for b in syms] for a in syms])
+        lo = np.array([[settings.min_dist_pair(a, b) for b in syms] for a in syms])
+    reach = float(hi.max())
+
+    if sites is None:
+        sites = tube_sites(structure, chirality)
+    k, s, w, x, y = sites
+    N = len(k)
+    n, m, t1, t2 = chirality.n, chirality.m, chirality.t1, chirality.t2
+    D = n * t2 - m * t1
+    a1 = np.asarray(structure.a1, dtype=float)[:2]
+    a2 = np.asarray(structure.a2, dtype=float)[:2]
+    P = _roll_sites(structure, chirality, s, w, zb[k], roll_inward)
+
+    def pair_name(i, j):
+        return frozenset([syms[i], syms[j]])
+
+    # ── Broken: every bond of the sheet, followed onto the tube ──────────────
+    basis = np.column_stack([a1, a2])
+    F = np.array([np.linalg.lstsq(basis, np.asarray(a["pos"], dtype=float)[:2], rcond=None)[0]
+                  for a in structure.atoms])
+    area = abs(a1[0] * a2[1] - a1[1] * a2[0])
+    ni = int(np.ceil(reach / (area / np.linalg.norm(a2)))) + 1
+    nj = int(np.ceil(reach / (area / np.linalg.norm(a1)))) + 1
+    di, dj = np.meshgrid(np.arange(-ni, ni + 1), np.arange(-nj, nj + 1), indexing="ij")
+    di, dj = di.ravel(), dj.ravel()
+    broken: set[frozenset] = set()
+    by_k = [np.nonzero(k == kk)[0] for kk in range(nb)]
+    for kk in range(nb):
+        idx = by_k[kk]
+        if len(idx) == 0:
+            continue
+        for kp in range(nb):
+            dx = di + F[kp, 0] - F[kk, 0]
+            dy = dj + F[kp, 1] - F[kk, 1]
+            vec = np.outer(dx, a1) + np.outer(dy, a2)
+            d_flat = np.sqrt((vec ** 2).sum(axis=1) + (zb[kp] - zb[kk]) ** 2)
+            sel = (d_flat > lo[kk, kp]) & (d_flat < hi[kk, kp])
+            if not sel.any():
+                continue
+            if pair_name(kk, kp) in broken:
+                continue
+            for bx, by, bd in zip(dx[sel], dy[sel], d_flat[sel]):
+                ds = (bx * t2 - by * t1) / D
+                dw = (n * by - m * bx) / D
+                Q = _roll_sites(structure, chirality, s[idx] + ds, w[idx] + dw,
+                                np.full(len(idx), zb[kp]), roll_inward)
+                d_tube = np.linalg.norm(P[idx] - Q, axis=1)
+                if np.any((d_tube >= hi[kk, kp]) & (d_tube >= (1.0 + min_change) * bd)):
+                    broken.add(pair_name(kk, kp))
+                    break
+
+    # ── Formed: every close pair of the tube, traced back to the sheet ───────
+    Lz = float(chirality.T_norm)
+    k_img = max(1, int(np.ceil(reach / Lz))) if Lz > 1e-9 else 0
+    order = np.array([0] + [b for b in range(-k_img, k_img + 1) if b != 0])
+    aug = np.vstack([P + np.array([0.0, 0.0, b * Lz]) for b in order])
+    pairs = cKDTree(aug).query_pairs(reach, output_type="ndarray")
+    formed: set[frozenset] = set()
+    if len(pairs):
+        pairs = pairs[(pairs[:, 0] < N) | (pairs[:, 1] < N)]
+        i, j = pairs[:, 0], pairs[:, 1]
+        ii, jj = i % N, j % N
+        bi, bj = order[i // N], order[j // N]
+        ki, kj = k[ii], k[jj]
+        dx = (x[jj] + bj * t1) - (x[ii] + bi * t1)
+        dy = (y[jj] + bj * t2) - (y[ii] + bi * t2)
+        turns = np.round((dx * t2 - dy * t1) / D)
+        dx = dx - turns * n
+        dy = dy - turns * m
+        vec = np.outer(dx, a1) + np.outer(dy, a2)
+        d_flat = np.sqrt((vec ** 2).sum(axis=1) + (zb[kj] - zb[ki]) ** 2)
+        d_tube = np.linalg.norm(aug[i] - aug[j], axis=1)
+        h, l = hi[ki, kj], lo[ki, kj]
+        new = (d_tube < h) & ~((d_flat > l) & (d_flat < h)) & (d_tube <= (1.0 - min_change) * d_flat)
+        for a, b in set(zip(ki[new].tolist(), kj[new].tolist())):
+            formed.add(pair_name(a, b))
+    return formed, broken
+
+
+def curvature_tokens(formed: set[frozenset], broken: set[frozenset]) -> list[str]:
+    """Catalogue spelling: "+A-B" for a bond rolling forms, "-A-B" for one it breaks."""
+    def name(p):
+        a = sorted(p)
+        return f"{a[0]}-{a[-1]}"
+    return sorted("+" + name(p) for p in formed) + sorted("-" + name(p) for p in broken)

@@ -17,6 +17,7 @@ find_primitive_cell(structure, tol)
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 
@@ -52,7 +53,86 @@ def _min_image_cart(diff: np.ndarray, a1: np.ndarray, a2: np.ndarray) -> np.ndar
 # Snap to symmetry
 # ─────────────────────────────────────────────────────────────────────────────
 
-def snap_to_symmetry(structure: LatticeStructure) -> tuple[LatticeStructure, str]:
+# Tolerance ladder for the LATTICE, tight to loose: (relative length, degrees).
+# A relaxation never lands exactly on the ideal metric -- C2DB's 1AgBrHfIO-1
+# has a and b 0.3 % apart and gamma 119.70 deg, which is p3m1 with the
+# distortion of the calculation -- so the search asks the same question at
+# several tolerances and keeps the highest symmetry it finds, reporting which
+# tolerance it needed.  Measured on 3000 catalogue systems this never exceeds
+# 0.23 A (median 0.001 A).  An angstrom ladder up to 0.5 A applied to the
+# lattice made biphenylene square and promoted 321 of those 3000 systems.
+SYM_LADDER = ((1e-4, 0.02), (1e-3, 0.1), (3e-3, 0.3), (1e-2, 0.6), (2e-2, 1.2))
+
+# Tolerance ladder for the ATOMS, in angstroms, as in Materials Studio's Find
+# Symmetry.  The one it replaces was a multiple of the lattice tolerance in
+# fractional coordinates, which let atoms be matched up to 1.18 A apart (2.2 %
+# of the catalogue beyond 0.5 A).  BASIS_MAX_A caps the climb.
+BASIS_LADDER_A = (0.001, 0.01, 0.1, 0.5)
+BASIS_MAX_A = float(os.environ.get("NTB_BASIS_MAX_A", 0.5))
+
+
+def symmetry_search(structure: LatticeStructure,
+                    ladder=SYM_LADDER) -> tuple[str, float, float]:
+    """Highest-symmetry Bravais class within the ladder, and the tolerance for it.
+
+    Returns (class, relative length tolerance, angle tolerance).  Ties go to
+    the tightest tolerance that already gives that class, so a cell that is
+    exactly hexagonal is reported as hexagonal at 1e-4, not at 2e-2.
+    """
+    return _symmetry_search_basis(structure, ladder)[:3]
+
+
+def _symmetry_search_basis(structure: LatticeStructure, ladder=SYM_LADDER):
+    """:func:`symmetry_search` plus the basis change that shows the class.
+
+    Every rung is asked in every equivalent basis of the lattice, so the class
+    no longer depends on which basis the file used.  Ties keep the basis as
+    given and the tightest rung.
+    """
+    from .io import lattice_type_at, SYM_RANK, equivalent_bases, _metric
+    bases = equivalent_bases(structure.a1, structure.a2)
+    best = None
+    for rel, ang in ladder:
+        for k, (M, B) in enumerate(bases):
+            a, b, g = _metric(B)
+            lt = lattice_type_at(a, b, g, len_tol=rel * 0.5 * (a + b), ang_tol=ang)
+            key = (SYM_RANK[lt], k == 0)
+            if best is None or key > best[0]:
+                best = (key, lt, rel, ang, M)
+    return best[1], best[2], best[3], best[4]
+
+
+def basis_tolerance(structure: LatticeStructure, start_A: float = 0.0,
+                    max_A: float | None = None,
+                    ladder=BASIS_LADDER_A) -> float:
+    """The step of the atom ladder at which the basis shows the most symmetry.
+
+    Climbs the angstrom ladder up to ``max_A`` and keeps the tightest step that
+    gives the largest point group, never below the step that covers
+    ``start_A`` (how far the lattice snap moved things: a basis test stricter
+    than that would reject the symmetry just snapped in).  Stored on the
+    structure in fractional units of the longest edge, which is what
+    :func:`core.planegroup.structure_point_group` compares; returned in A.
+    """
+    from .planegroup import structure_point_group
+    cap = BASIS_MAX_A if max_A is None else max_A
+    steps = [t for t in ladder if t <= cap + 1e-12] or [ladder[0]]
+    floor = next((t for t in steps if t >= start_A - 1e-12), steps[-1])
+    edge = max(structure.a, structure.b)
+    best_tol, best_order = steps[-1], -1
+    for tol in steps:
+        if tol < floor:
+            continue
+        structure.sym_tol = tol / edge
+        order = len(structure_point_group(structure))
+        if order > best_order:
+            best_tol, best_order = tol, order
+    structure.sym_tol = best_tol / edge
+    return best_tol
+
+
+def snap_to_symmetry(structure: LatticeStructure,
+                     ladder=SYM_LADDER) -> tuple[LatticeStructure, str]:
     """
     Enforce exact lattice symmetry.
 
@@ -76,12 +156,18 @@ def snap_to_symmetry(structure: LatticeStructure) -> tuple[LatticeStructure, str
     (new_structure, description)
         description is a human-readable string summarising the changes.
     """
-    lt    = structure.lattice_type
-    a1    = structure.a1.copy()
-    a2    = structure.a2.copy()
+    lt, rel_tol, ang_tol, M = _symmetry_search_basis(structure, ladder)
+    # The snap is done in the basis that shows the class and carried back to
+    # the basis the structure uses, so indices (n, m) keep their meaning.  For
+    # M = I this is exactly the previous behaviour.
+    A_orig = np.array([structure.a1, structure.a2], dtype=float)
+    moved_basis = not np.array_equal(M, np.eye(2, dtype=int))
+    B = M @ A_orig
+    a1    = B[0].copy()
+    a2    = B[1].copy()
     a_len = float(np.linalg.norm(a1))
     b_len = float(np.linalg.norm(a2))
-    g_old = structure.gamma_deg
+    g_old = math.degrees(math.acos(max(-1.0, min(1.0, float(a1 @ a2) / (a_len * b_len)))))
 
     if lt == "hexagonal":
         a_ideal = (a_len + b_len) / 2.0
@@ -119,7 +205,21 @@ def snap_to_symmetry(structure: LatticeStructure) -> tuple[LatticeStructure, str
             f"γ: {g_old:.4f}° kept (rhombic)"
         )
     else:
+        basis_tolerance(structure)
         return structure, "Oblique lattice — nothing to snap."
+
+    if moved_basis:
+        Bn = np.array([a1_new, a2_new], dtype=float)
+        if np.linalg.det(B) < 0:                 # keep the handedness of the cell
+            Bn[:, 1] *= -1.0
+        Minv = np.round(np.linalg.inv(M.astype(float))).astype(int)
+        An = Minv @ Bn
+        th = math.atan2(An[0, 1], An[0, 0])      # a1 back on the x axis
+        c, s_ = math.cos(th), math.sin(th)
+        An = An @ np.array([[c, -s_], [s_, c]])
+        a1_new, a2_new = An[0], An[1]
+        a1, a2 = A_orig[0].copy(), A_orig[1].copy()
+        desc = f"{desc}  (base equivalente {M.tolist()})"
 
     # Reproject atomic positions through fractional coordinates
     new_atoms = []
@@ -128,7 +228,11 @@ def snap_to_symmetry(structure: LatticeStructure) -> tuple[LatticeStructure, str
         new_pos = _to_cart(frac, a1_new, a2_new)
         new_atoms.append({**atom, "pos": new_pos})
 
-    return LatticeStructure(new_atoms, a1_new, a2_new, source=structure.source), desc
+    out = LatticeStructure(new_atoms, a1_new, a2_new, source=structure.source)
+    moved = rel_tol * max(a_len, b_len)
+    tol_atoms = basis_tolerance(out, start_A=moved)
+    desc = f"{desc}  [tol {rel_tol * 100:.2f} % / {ang_tol:.2f}°, átomos {tol_atoms:g} Å]"
+    return out, desc
 
 
 # ─────────────────────────────────────────────────────────────────────────────

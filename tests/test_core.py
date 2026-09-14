@@ -553,6 +553,102 @@ class TestChirality:
 # 5. TestBuilder
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _rect_bpn():
+    """Rectangular cell with the biphenylene network's a, b and one atom.
+
+    b/a = 3.88/4.26 closes only at very long T, so every chiral (n, m) has a
+    long trade-off front of approximate cells.
+    """
+    a1 = np.array([4.26, 0.0])
+    a2 = np.array([0.0, 3.88])
+    atoms = [{"symbol": "C", "pos": np.array([0.0, 0.0]), "z": 0.0}]
+    return LatticeStructure(a1=a1, a2=a2, atoms=atoms)
+
+
+def _exhaustive_front(n, m, a1, a2, cap):
+    """Residual front over EVERY lattice vector of at most ``cap`` cells.
+
+    No continued fractions and no window around an ideal t1: all (t1, t2) in
+    a box large enough to hold the closest vector of every cell count up to
+    the cap.  Returns {cells: strain %}.
+    """
+    Ch = n * a1 + m * a2
+    Chn = float(np.linalg.norm(Ch))
+    area = abs(float(a1[0] * a2[1] - a1[1] * a2[0]))
+    g = math.gcd(abs(n), abs(m))
+    R = math.hypot(cap * area / Chn, Chn / g) + 1.0
+    B = int(R / np.linalg.svd(np.stack([a1, a2]), compute_uv=False).min()) + 2
+    t1, t2 = np.meshgrid(np.arange(-B, B + 1), np.arange(0, B + 1), indexing="ij")
+    t1, t2 = t1.ravel(), t2.ravel()
+    keep = (t2 > 0) | (t1 > 0)
+    t1, t2 = t1[keep], t2[keep]
+    cells = np.abs(n * t2 - m * t1)
+    ok = (cells > 0) & (cells <= cap)
+    t1, t2, cells = t1[ok], t2[ok], cells[ok]
+    T = np.outer(t1, a1) + np.outer(t2, a2)
+    eps = 100.0 * np.abs(T @ Ch) / (Chn * np.linalg.norm(T, axis=1))
+    best = np.full(cap + 1, np.inf)
+    np.minimum.at(best, cells, eps)
+    front, b = {}, np.inf
+    for c in np.nonzero(np.isfinite(best))[0]:
+        if best[c] < b - 1e-10:
+            front[int(c)] = float(best[c])
+            b = best[c]
+    return front
+
+
+class TestTranslationSearch:
+    """T_options and the default T search against exhaustive enumeration."""
+
+    @pytest.mark.parametrize("make, n, m, limit", [
+        (_rect_bpn, 5, 6, 300),
+        (_rect_bpn, 4, 1, 300),
+        (_graphene, -1, 2, 300),     # exact T = a1; a cheaper cell precedes it
+        (_oblique, 2, 1, 100),
+    ])
+    def test_front_matches_exhaustive_enumeration(self, make, n, m, limit):
+        """
+        Every cell no cheaper cell beats, and nothing else.  Built from
+        convergents with t1 near its ideal, the front of (5,6) on this lattice
+        had 7 rows where the exhaustive one has over a hundred.
+        """
+        from core.chirality import T_options, _search_T
+        s = make()
+        rows = T_options(n, m, s.a1, s.a2, limit)
+        got = {abs(n * r["t2"] - m * r["t1"]): r["strain"] for r in rows}
+        d1, d2, _ = _search_T(n, m, s.a1, s.a2, limit=limit)
+        want = _exhaustive_front(n, m, s.a1, s.a2, abs(n * d2 - m * d1))
+        assert set(got) == set(want)
+        for c, e in want.items():
+            assert got[c] == pytest.approx(e, rel=1e-9, abs=1e-12)
+
+    def test_max_strain_returns_the_cheapest_cell_within_tolerance(self):
+        from core.chirality import _search_T
+        s = _rect_bpn()
+        n, m, limit, tol = 5, 6, 300, 0.1
+        d1, d2, _ = _search_T(n, m, s.a1, s.a2, limit=limit)
+        front = _exhaustive_front(n, m, s.a1, s.a2, abs(n * d2 - m * d1))
+        cheapest = min(c for c, e in front.items() if e <= tol)
+        ch = compute_chirality(n, m, s, search_limit=limit, max_strain=tol)
+        assert ch.n_atoms == cheapest          # one atom per primitive cell
+        assert ch.strain <= tol
+
+    def test_default_search_considers_t1_zero(self):
+        """T = a2 can be the best cell without being exactly perpendicular.
+
+        Skipping t1 = 0 made AgBr3 (5,4) take a 1496-cell T at 0.37 % over
+        a2 alone at 0.24 %.
+        """
+        from core.chirality import _search_T, _search_T_scan
+        a1 = np.array([1.0, 0.0])
+        a2 = np.array([0.01, 1.0])
+        expected = 0.01 / math.hypot(0.01, 1.0)
+        for search in (_search_T, _search_T_scan):
+            t1, t2, err = search(1, 0, a1, a2, limit=30)
+            assert (t1, t2) == (0, 1), search.__name__
+            assert err == pytest.approx(expected)
+
+
 class TestBuilder:
     def test_atom_count_matches_chirality(self):
         """Built nanotube atom count must match the chirality prediction."""
@@ -685,6 +781,39 @@ class TestBuilder:
         ch = compute_chirality(4, 2, s)
         nt = build_nanotube(s, ch, vacuum=10.0)
         assert abs(nt.length - float(nt.box[2])) < 1e-9
+
+    @pytest.mark.parametrize("row", range(6))
+    def test_approximate_cell_holds_each_site_once(self, row):
+        """
+        An approximate T is not perpendicular to Ch, and the cell must still be
+        the (Ch, T) parallelogram: n_atoms_cell * |n*t2 - m*t1| atoms, every
+        site once, periodic around and along the tube.  Cut by projections onto
+        the two oblique axes it repeated sites -- 184 atoms instead of 6 for
+        biphenylene (5,6) at t = (1, 1).  Rows 0-4 are 67-99.6 % residual,
+        row 5 is 0.23 %.
+        """
+        pytest.importorskip("scipy")
+        from scipy.spatial import cKDTree
+        from core.chirality import T_options
+        s = _rect_bpn()
+        rows = T_options(5, 6, s.a1, s.a2, 300)
+        ch = compute_chirality(5, 6, s, search_limit=300,
+                               max_strain=rows[row]["strain"])
+        assert (ch.t1, ch.t2) == (rows[row]["t1"], rows[row]["t2"])
+        nt = build_nanotube(s, ch, vacuum=10.0)
+        assert len(nt.symbols) == ch.n_atoms
+
+        # Unroll the tube and look for a site present twice, periodic images
+        # of the cell included.
+        c = float(nt.box[0]) / 2.0
+        R = ch.Ch_norm / (2.0 * math.pi)
+        u = np.mod(np.arctan2(nt.coords[:, 1] - c, nt.coords[:, 0] - c),
+                   2.0 * math.pi) * R
+        pts = np.column_stack([u, nt.coords[:, 2]])
+        images = np.vstack([pts + [i * ch.Ch_norm, k * nt.length]
+                            for i in (-1, 0, 1) for k in (-1, 0, 1)])
+        d, _ = cKDTree(images).query(pts, k=2)
+        assert d[:, 1].min() > 1e-3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -953,6 +1082,28 @@ class TestSymmetry:
         assert "Oblique" in desc
         assert abs(snapped.gamma_deg - s.gamma_deg) < 0.01
 
+    def test_centred_rectangular_in_non_rhombic_basis(self):
+        """A centred rectangular lattice written with a != b keeps its class.
+
+        u and v are the rhombic primitive vectors (|u| = |v|); the cell below
+        uses u and u + v instead, which is the same lattice with a != b.  It
+        was labelled oblique before the classifier looked at equivalent bases
+        (1 711 catalogue systems).  The snap must keep the basis the cell uses,
+        so (n, m) keep their meaning, and make the mirror exact.
+        """
+        from core.planegroup import lattice_point_group
+        # |u| = |v| = 5.385 A, rhombic angle 136.4 deg; with u + v the cell is
+        # 5.385 x 4.000 A at 68.2 deg -- far from hexagonal and from square, so
+        # the only class it can reach is centred rectangular.
+        u, v = np.array([2.0, 5.0]), np.array([2.0, -5.0])
+        s = LatticeStructure([{"symbol": "C", "pos": np.zeros(2), "z": 0.0}], u, u + v)
+        assert abs(s.a - s.b) > 0.01
+        assert s.lattice_type == "centred rectangular"
+        snapped, _ = snap_to_symmetry(s)
+        assert snapped.lattice_type == "centred rectangular"
+        assert abs(snapped.a - s.a) < 1e-6 and abs(snapped.b - s.b) < 1e-6
+        assert len(lattice_point_group(snapped)) == 4
+
     def test_snap_returns_latticestructure(self):
         """snap_to_symmetry must return a LatticeStructure, not None."""
         result, _ = snap_to_symmetry(_graphene())
@@ -1044,3 +1195,59 @@ class TestRoundTrip:
             out = writer(*args, path)
             assert out.exists(), f"{filename} was not created"
             assert out.stat().st_size > 0, f"{filename} is empty"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. TestCurvatureBonds — bonds that rolling forms and breaks, pair by pair
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _thick_bilayer():
+    """Two graphene sheets at z = ±3 Å: a synthetic thick layer whose outer
+    face is stretched by (R + 3)/R when rolled."""
+    g = _graphene()
+    atoms = [{**at, "z": dz} for dz in (3.0, -3.0) for at in g.atoms]
+    return LatticeStructure(a1=g.a1, a2=g.a2, atoms=atoms)
+
+
+class TestCurvatureBonds:
+
+    def test_sites_are_the_builder_positions(self):
+        from core.builder import tube_sites, _roll_sites
+        for s, (n, m) in ((_graphene(), (5, 3)), (_buckled(), (4, 2))):
+            ch = compute_chirality(n, m, s)
+            k, sw, w, _x, _y = tube_sites(s, ch)
+            z = np.array([a["z"] for a in s.atoms])[k]
+            for inward in (False, True):
+                nt = build_nanotube(s, ch, vacuum=10.0, roll_inward=inward)
+                shift = np.array([nt.box[0] / 2, nt.box[1] / 2, 0.0])
+                P = _roll_sites(s, ch, sw, w, z, inward)
+                assert np.abs(nt.coords - shift - P).max() < 1e-9
+
+    def test_wide_graphene_tube_is_clean(self):
+        from core.builder import check_curvature_bonds
+        s = _graphene()
+        assert check_curvature_bonds(s, compute_chirality(10, 10, s)) == (set(), set())
+
+    def test_walls_closer_than_a_bond_are_formed(self):
+        # (2,0) is 1.57 Å wide: opposite walls sit inside the C-C cutoff.  The
+        # species-level check misses it, because C-C is bonded in the sheet.
+        from core.builder import check_curvature_bonds, check_spurious_bonds
+        s = _graphene()
+        ch = compute_chirality(2, 0, s)
+        formed, broken = check_curvature_bonds(s, ch)
+        assert formed == {frozenset({"C"})}
+        assert check_spurious_bonds(s, build_nanotube(s, ch)) == set()
+
+    def test_stretched_outer_face_breaks_bonds(self):
+        from core.builder import check_curvature_bonds, curvature_tokens
+        s = _thick_bilayer()
+        formed, broken = check_curvature_bonds(s, compute_chirality(10, 10, s))
+        assert frozenset({"C"}) in broken
+        assert "-C-C" in curvature_tokens(formed, broken)
+        # Wide enough, the stretch stays inside the 10 % margin.
+        assert check_curvature_bonds(s, compute_chirality(40, 40, s)) == (set(), set())
+
+    def test_tokens_mark_formed_and_broken(self):
+        from core.builder import curvature_tokens
+        tokens = curvature_tokens({frozenset({"S"}), frozenset({"Mo", "S"})}, {frozenset({"Mo"})})
+        assert tokens == ["+Mo-S", "+S-S", "-Mo-Mo"]
