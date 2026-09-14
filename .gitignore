@@ -46,6 +46,8 @@ _diary/
 pytest_log.txt
 debug*.txt
 *.log
+nohup.out
+*.bak_*
 
 # ── Paper source (kept locally, not published in this repo) ──────────────────
 NTBuilder_paper/
