@@ -61,6 +61,8 @@ python main.py
 
 **Updating an existing copy**
 
+The published history was rewritten on 13 September 2026. A copy cloned before that date does not update with `git pull`; bring it to the current version once with `git fetch origin && git reset --hard origin/main` (this discards local changes to tracked files), and use `git pull` afterwards.
+
 ```bash
 cd ntbuilder
 git pull
