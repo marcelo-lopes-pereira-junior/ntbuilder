@@ -30,6 +30,7 @@ const qsa = sel => document.querySelectorAll(sel);
 const I18N = {
   pt: {
     "nav.nanoeng": "NanoEng", "nav.research": "Pesquisa",
+    "nav.catalogue": "Catálogo de nanotubos",
     "nav.tools": "Ferramentas", "nav.pubs": "Publicações",
     "header.theme":  "Alternar tema claro/escuro",
 
@@ -91,6 +92,13 @@ const I18N = {
     "map.colorLabelStrain": "Strain (%)",
     "map.legendClean":      "limpo",
     "map.legendSpurious":   "lig. espúrias",
+    "map.formed":           "formada",
+    "map.broken":           "rompida",
+    "map.checking":         "Verificando ligações espúrias {d} de {n}",
+    "map.enlarge":          "Ampliar mapa",
+    "map.fromCatalogue":    "do catálogo, célula com ε ≤ 0,5 %",
+    "map.bigTitle":         "Mapa de quiralidade",
+    "map.checkFailed":      "Checagem de ligações espúrias interrompida",
 
     "viewer.title": "Visualizador 3D",
     "viewer.reset": "Reposicionar câmera",
@@ -244,6 +252,7 @@ const I18N = {
   },
   en: {
     "nav.nanoeng": "NanoEng", "nav.research": "Research",
+    "nav.catalogue": "Nanotube catalogue",
     "nav.tools": "Tools", "nav.pubs": "Publications",
     "header.theme":  "Toggle light/dark theme",
 
@@ -305,6 +314,13 @@ const I18N = {
     "map.colorLabelStrain": "Strain (%)",
     "map.legendClean":      "clean",
     "map.legendSpurious":   "spurious bonds",
+    "map.formed":           "formed",
+    "map.broken":           "broken",
+    "map.checking":         "Checking spurious bonds {d} of {n}",
+    "map.enlarge":          "Enlarge map",
+    "map.fromCatalogue":    "from the catalogue, cell with ε ≤ 0.5 %",
+    "map.bigTitle":         "Chirality map",
+    "map.checkFailed":      "Spurious-bond check interrupted",
 
     "viewer.title": "3D Viewer",
     "viewer.reset": "Reset camera",
@@ -651,6 +667,8 @@ $("example-load-btn").addEventListener("click", () => {
   if (!val) { toast(t("t.selectExample"), "err"); return; }
   state.fileId = null;
   state.example = val;
+  state.catalogueTube = null;
+  state.catalogueId = null;
   setCifStatus("ok", val.replace(/\.[^.]+$/, "").replace(/_/g, " "));
   $("btn-prim").disabled = false;
   $("prim-result").classList.add("hidden");
@@ -674,10 +692,10 @@ dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragging
 dropZone.addEventListener("drop", e => {
   e.preventDefault();
   dropZone.classList.remove("dragging");
-  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files[0]) { state.catalogueTube = null; state.catalogueId = null; handleFile(e.dataTransfer.files[0]); }
 });
 $("cif-file-input").addEventListener("change", e => {
-  if (e.target.files[0]) handleFile(e.target.files[0]);
+  if (e.target.files[0]) { state.catalogueTube = null; state.catalogueId = null; handleFile(e.target.files[0]); }
 });
 
 async function handleFile(file) {
@@ -759,10 +777,37 @@ $("btn-prim").addEventListener("click", async () => {
 });
 
 /* ---------- Polar map ------------------------------------------------------ */
+/* O mapa de um Sistema 2D aberto pelo catálogo já está no banco: (n,m), D,
+ * ângulo, átomos, ε e as ligações espúrias de cada sentido.  Vale enquanto a
+ * camada é a que veio do catálogo e o D pedido cabe na janela dele; fora disso,
+ * ou com uma API que não o tem, devolve null e o mapa é calculado. */
+async function catalogueMap(dMax, rollInward, useStrainFilter) {
+  if (!state.catalogueId || !state.fileId) return null;
+  if (state.catalogueFileId === undefined) state.catalogueFileId = state.fileId;
+  if (state.catalogueFileId !== state.fileId) return null;
+  try {
+    const r = await fetch(`api/cat/polar/${encodeURIComponent(state.catalogueId)}?roll_inward=${rollInward}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (data.d_cover && dMax > data.d_cover[1] + 0.5) return null;
+    data.dmax = dMax;
+    if (useStrainFilter) {
+      const lim = parseFloat($("inp-strain-max").value) || 5;
+      data.points = data.points.filter((p) => p.strain <= lim);
+    }
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function runPolar() {
   const empty = $("polar-empty");
   empty.style.display = "flex";
   empty.innerHTML = `<div class="spinner"></div><span>${t("map.computing")}</span>`;
+  // Um mapa novo abandona a checagem de espúrias do anterior.
+  state.spuriousJob = null;
+  clearTimeout(state.spuriousTimer);
 
   const dMax = parseFloat($("inp-dmax").value) || 25;
   const useStrainFilter = $("strain-filter-chk").checked;
@@ -785,17 +830,74 @@ async function runPolar() {
   };
 
   try {
-    const data = await apiJSON("POST", "api/polar", body);
+    const data = (await catalogueMap(dMax, rollInward, useStrainFilter)) || await apiJSON("POST", "api/polar", body);
     state.polarData = data;
     empty.style.display = "none";
     renderPolar(data);
-    $("polar-info").textContent = `${data.points.length} pts · a=${data.a} Å · ${data.lattice_type}`;
+    $("polar-info").textContent = `${data.points.length} pts · a=${data.a} Å · ${data.lattice_type}`
+      + (data.source === "catalogue" ? ` · ${t("map.fromCatalogue")}` : "");
+    pollSpurious(data);
     updateStructInfo(data);
     if (data.snap_desc) toast(`${t("t.snapped")}: ${data.snap_desc}`, "info", 5000);
   } catch (err) {
     empty.innerHTML = `<div class="big-icon">⚠</div><span>${err.message}</span>`;
     toast(t("t.polarErr") + ": " + err.message, "err");
   }
+}
+
+function setPolarInfo(text) {
+  $("polar-info").textContent = text;
+  const big = document.getElementById("polar-big-info");
+  if (big) big.textContent = text;
+}
+
+/* Ligações espúrias chegando aos poucos.  O mapa aparece na hora e o servidor
+ * monta e confere os tubos em segundo plano, do menor para o maior; a cada
+ * segundo os X que já saíram entram no mapa.  Uma API antiga manda os X
+ * prontos, sem spurious_job, e aí não há o que buscar. */
+function pollSpurious(data) {
+  clearTimeout(state.spuriousTimer);
+  state.spuriousJob = data.spurious_job || null;
+  if (!state.spuriousJob) return;
+  const job = state.spuriousJob;
+  const base = `${data.points.length} pts · a=${data.a} Å · ${data.lattice_type}`;
+  const label = (d, n) => t("map.checking").replace("{d}", d).replace("{n}", n);
+  let seen = -1, stall = 0;
+  setPolarInfo(`${base} · ${label(0, data.spurious_total || data.points.length)}`);
+  const tick = async () => {
+    if (state.spuriousJob !== job || state.polarData !== data) return;
+    try {
+      const r = await fetch(`api/polar/spurious/${encodeURIComponent(job)}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      if (state.spuriousJob !== job || state.polarData !== data) return;
+      if (d.done !== seen) {
+        seen = d.done;
+        stall = 0;
+        const res = d.results || {};
+        data.points.forEach((p) => {
+          const v = res[`${p.n},${p.m}`];
+          if (Array.isArray(v)) p.spurious = v;
+        });
+        renderPolar(data);
+        if ($("polar-big-overlay").classList.contains("open")) renderPolar(data, "polar-plot-big");
+        onNMChange();
+      } else {
+        stall += 1;
+      }
+      if (d.state === "done") { setPolarInfo(base); return; }
+      if (d.state === "failed" || d.state === "cancelled" || stall > 300) {
+        setPolarInfo(`${base} · ${t("map.checkFailed")}`);
+        return;
+      }
+      setPolarInfo(`${base} · ${label(d.done || 0, d.total || data.points.length)}`);
+    } catch (err) {
+      stall += 1;
+      if (stall > 30) { setPolarInfo(`${base} · ${t("map.checkFailed")}`); return; }
+    }
+    state.spuriousTimer = setTimeout(tick, 1000);
+  };
+  state.spuriousTimer = setTimeout(tick, 600);
 }
 
 function updateStructInfo(data) {
@@ -876,7 +978,7 @@ function getFilteredPoints(data) {
   return data.points.filter(p => p.diameter >= dMin && p.diameter <= dMax);
 }
 
-function renderPolar(data) {
+function renderPolar(data, targetId = "polar-plot") {
   // Clear the overlay here, not only in runPolar's success path.  Four of the
   // five callers re-render from cached data -- language, theme and the two
   // colour toggles -- and a failed request leaves "HTTP 502" sitting in the
@@ -884,6 +986,18 @@ function renderPolar(data) {
   const ov = $("polar-empty");
   if (ov) ov.style.display = "none";
 
+  // Setor de 180 graus (só ±I): qualquer meia-volta é domínio fundamental.  A
+  // que começa em a1 deixa todo ângulo com o seu valor físico; a escolhida pelo
+  // maior vão começava em 90 graus numa rede retangular, com as bordas em 90 e
+  // 270 graus e as marcas intermediárias contadas a partir da tela.
+  if (data.theta_max >= 179.9 && Math.abs(data.theta_start || 0) > 1e-6) {
+    data.points.forEach((p) => {
+      const r = p.theta_deg * Math.PI / 180;
+      p.x = +(p.diameter * Math.cos(r)).toFixed(4);
+      p.y = +(p.diameter * Math.sin(r)).toFixed(4);
+    });
+    data.theta_start = 0;
+  }
   const pts = getFilteredPoints(data);
   if (!pts.length) return;
 
@@ -953,13 +1067,25 @@ function renderPolar(data) {
     hoverinfo: "skip", showlegend: false,
   };
 
+  // Ângulo físico de uma direção da tela: o servidor gira os pontos para o setor
+  // começar em zero na tela, e as marcas precisam somar o início de volta.
+  const start = data.theta_start || 0;
+  const physDeg = (screen) => {
+    let v = (start + screen) % 180;
+    if (v < 0) v += 180;
+    if (v < 1e-6 && screen > 1e-6) v = 180;
+    return `${+v.toFixed(1)}°`;
+  };
+  // Zigzag e armchair são nomes do favo de mel: só numa rede hexagonal cujo
+  // setor de 30 graus começa na direção (n,0).
+  const hexNames = data.lattice_type === "hexagonal" && Math.abs(start) < 1 && Math.abs(thetaMax - 30) < 1;
   const tStep = thetaMax <= 30 ? 10 : thetaMax <= 60 ? 15 : 30;
   const angSegs = [], tLabels = [];
   for (let th = tStep; th < thetaMax; th += tStep) {
     const t = th * Math.PI / 180;
     angSegs.push({ x: [0, dmax * Math.cos(t)], y: [0, dmax * Math.sin(t)] });
     tLabels.push({ x: (dmax + 1.2) * Math.cos(t), y: (dmax + 1.2) * Math.sin(t),
-                   text: `${th}°`, showarrow: false,
+                   text: physDeg(th), showarrow: false,
                    font: { size: 8, color: c.text }, xanchor: "center", yanchor: "middle" });
   }
   const gridAngTrace = angSegs.length ? {
@@ -994,18 +1120,26 @@ function renderPolar(data) {
   // Plotly accepts ``marker.symbol`` / ``marker.size`` as per-point
   // arrays, so we keep a single trace (preserves the index → 5 of
   // ``selectedTrace`` that downstream Plotly.restyle calls depend on).
-  const markerSymbols = pts.map(p =>
-    (p.spurious && p.spurious.length) ? "x" : "circle");
-  const markerSizes = pts.map(p =>
-    (p.spurious && p.spurious.length) ? 10 : 7);
-
+  // Bolinha cheia para os limpos (e os ainda não verificados) e X vazado, só o
+  // traço na cor do ponto, para os com ligação espúria.  Um X preenchido do
+  // tamanho da bolinha virava um borrão igual a ela no mapa pequeno.
+  const hasSp = (p) => Array.isArray(p.spurious) && p.spurious.length > 0;
+  const hover = (p) => {
+    const spName = (x) => (x[0] === "+" ? `${x.slice(1)} ${t("map.formed")}`
+                         : x[0] === "-" ? `${x.slice(1)} ${t("map.broken")}` : x);
+    const sp = hasSp(p) ? `<br><b>${t("map.legendSpurious")}:</b> ${p.spurious.map(spName).join(", ")}` : "";
+    return `(${p.n},${p.m})<br>D=${p.diameter} Å<br>θ=${p.theta_deg.toFixed(1)}°<br>`
+         + `atoms=${p.n_atoms}<br>strain=${p.strain.toFixed(4)}%${sp}`;
+  };
+  const colorOf = (p) => (mode === "n_atoms" ? p.n_atoms : p.strain);
+  const cleanPts = pts.filter(p => !hasSp(p));
+  const spPts = pts.filter(hasSp);
   const trace = {
     type: "scatter", mode: "markers",
-    x: pts.map(p => p.x), y: pts.map(p => p.y),
+    x: cleanPts.map(p => p.x), y: cleanPts.map(p => p.y),
     marker: {
-      symbol: markerSymbols,
-      size:   markerSizes,
-      color: colorVals,
+      symbol: "circle", size: 7,
+      color: cleanPts.map(colorOf),
       colorscale: "Viridis",
       cmin: cMin, cmax: cMax,
       showscale: true,
@@ -1018,14 +1152,22 @@ function renderPolar(data) {
       },
       line: { width: 0.5, color: "rgba(120,130,150,.25)" },
     },
-    text: pts.map(p => {
-      const sp = (p.spurious && p.spurious.length)
-        ? `<br><b>spurious bonds:</b> ${p.spurious.join(", ")}` : "";
-      return `(${p.n},${p.m})<br>D=${p.diameter} Å<br>θ=${p.theta_deg.toFixed(1)}°<br>`
-           + `atoms=${p.n_atoms}<br>strain=${p.strain.toFixed(4)}%${sp}`;
-    }),
+    text: cleanPts.map(hover),
     hovertemplate: "%{text}<extra></extra>",
-    customdata: pts,
+    customdata: cleanPts,
+  };
+  const spuriousTrace = {
+    type: "scatter", mode: "markers",
+    x: spPts.map(p => p.x), y: spPts.map(p => p.y),
+    marker: {
+      symbol: "x-thin-open", size: 7,
+      color: spPts.map(colorOf),
+      colorscale: "Viridis", cmin: cMin, cmax: cMax, showscale: false,
+      line: { width: 2 },
+    },
+    text: spPts.map(hover),
+    hovertemplate: "%{text}<extra></extra>",
+    customdata: spPts,
   };
 
   const selectedTrace = {
@@ -1035,19 +1177,34 @@ function renderPolar(data) {
     hoverinfo: "skip", showlegend: false, name: "selected",
   };
 
+  // Rótulos de referência só nos pontos que estão de fato sobre cada borda, do
+  // lado de fora dela.  Antes supunham (n,0) na borda inicial e (n,n) na final,
+  // como no grafeno, e numa rede retangular o (5,5) caía no meio do setor.
   const nStep = Math.max(5, Math.round(dmax / 5 / 5) * 5);
-  const zigzagLabels = data.points
-    .filter(p => p.m === 0 && p.n > 0 && p.n % nStep === 0)
-    .map(p => ({ x: p.x, y: -dmax * 0.055, text: `n=${p.n}`, showarrow: false,
-                 font: { size: 8, color: c.text }, xanchor: "center", yanchor: "top" }));
-  const armLabels = data.points
-    .filter(p => p.n === p.m && p.n > 0 && p.n % nStep === 0)
-    .map(p => {
-      const off = dmax * 0.06;
-      return { x: p.x - off * Math.sin(tmRad), y: p.y + off * Math.cos(tmRad),
-               text: `n=${p.n}`, showarrow: false,
-               font: { size: 8, color: c.text }, xanchor: "right", yanchor: "middle" };
-    });
+  const gcd = (a, b) => { a = Math.abs(a); b = Math.abs(b); while (b) [a, b] = [b, a % b]; return a; };
+  const screenDeg = (p) => { let v = Math.atan2(p.y, p.x) * 180 / Math.PI; if (v < -1e-6) v += 360; return v; };
+  // Um rótulo só entra se ficar a pelo menos 20 % do raio do anterior, e os
+  // índices múltiplos de 5 vêm primeiro: numa rede quadrada de 3,3 Å o (5,0),
+  // o (10,0), o (15,0) caíam em cima das marcas de diâmetro e uns dos outros.
+  const edgeLabels = (edgeDeg, outward, off) => {
+    const onEdge = data.points
+      .filter(p => Math.abs(screenDeg(p) - edgeDeg) < 0.3 && gcd(p.n, p.m) % 5 === 0)
+      .sort((a, b) => a.diameter - b.diameter);
+    const kept = [];
+    for (const p of onEdge) {
+      if (p.diameter < dmax * 0.12) continue;
+      if (kept.length && p.diameter - kept[kept.length - 1].diameter < dmax * 0.2) continue;
+      kept.push(p);
+    }
+    const a = edgeDeg * Math.PI / 180;
+    const nx = outward * Math.sin(a), ny = -outward * Math.cos(a);
+    return kept.map(p => ({ x: p.x + off * nx, y: p.y + off * ny,
+      text: hexNames ? `n=${gcd(p.n, p.m)}` : `(${p.n},${p.m})`, showarrow: false,
+      font: { size: 8, color: c.muted || c.text }, xanchor: "center", yanchor: edgeDeg === 0 ? "top" : "middle" }));
+  };
+  // Na borda de baixo os índices ficam numa segunda linha, abaixo das marcas de D.
+  const zigzagLabels = edgeLabels(0, 1, dmax * 0.085);
+  const armLabels = thetaMax < 179.9 ? edgeLabels(thetaMax, -1, dmax * 0.07) : [];
 
   // A "legend" describing what each marker means.  We only render it for
   // structures that can develop curvature-induced spurious bonds (i.e.
@@ -1085,13 +1242,11 @@ function renderPolar(data) {
     // edges are two other directions, and naming them zigzag and armchair
     // would be simply false.  There they carry their angle instead.
     { x: dmax * 1.04 * Math.cos(t0Rad), y: dmax * 1.04 * Math.sin(t0Rad),
-      text: (data.theta_start || 0) < 1.0 ? "<b>Zigzag</b> (m=0)"
-            : `${(data.theta_start || 0).toFixed(0)}°`,
+      text: hexNames ? "<b>Zigzag</b> (m=0)" : physDeg(0),
       showarrow: false, font: { size: 9, color: c.text },
       xanchor: Math.cos(t0Rad) < 0 ? "right" : "left", yanchor: "middle" },
     { x: dmax * 1.04 * Math.cos(tmRad), y: dmax * 1.04 * Math.sin(tmRad),
-      text: (data.theta_start || 0) < 1.0 ? "<b>Armchair</b> (n=m)"
-            : `${((data.theta_start || 0) + thetaMax).toFixed(0)}°`,
+      text: hexNames ? "<b>Armchair</b> (n=m)" : physDeg(thetaMax),
       showarrow: false, font: { size: 9, color: c.text },
       xanchor: Math.cos(tmRad) < 0 ? "right" : "left", yanchor: "bottom" },
     { x: 0, y: -dmax * 0.03, text: "0", showarrow: false,
@@ -1100,13 +1255,35 @@ function renderPolar(data) {
   ];
 
   const yMax = yTop;   // amostrado acima
+  // A área do gráfico inclui os rótulos das bordas: "(0,15)" saía cortado à esquerda.
+  const edgeAnn = [...zigzagLabels, ...armLabels];
+  const xLo = Math.min(xLeft - dmax * 0.06, ...edgeAnn.map(q => q.x - dmax * 0.09));
+  const xHi = Math.max(xRight + dmax * 0.20, ...edgeAnn.map(q => q.x + dmax * 0.09));
+  const yLo = Math.min(yBot - dmax * 0.15, ...edgeAnn.map(q => q.y - dmax * 0.06));
+  const yHi = Math.max(yMax + dmax * 0.10, ...edgeAnn.map(q => q.y + dmax * 0.06));
+  // Marcadores do tamanho que o espaço entre pontos vizinhos permite na tela.
+  const plotDiv = $(targetId);
+  const wPx = Math.max(150, (plotDiv.clientWidth || 420) - 40);
+  const hPx = Math.max(150, (plotDiv.clientHeight || 420) - 68);
+  const pxPerUnit = Math.min(wPx / (xHi - xLo), hPx / (yHi - yLo));
+  let nn2 = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, d2 = dx * dx + dy * dy;
+      if (d2 > 1e-9 && d2 < nn2) nn2 = d2;
+    }
+  }
+  const mSize = Number.isFinite(nn2) ? Math.max(4, Math.min(16, 0.72 * Math.sqrt(nn2) * pxPerUnit)) : 7;
+  trace.marker.size = mSize;
+  spuriousTrace.marker.size = mSize;
+  spuriousTrace.marker.line.width = Math.max(1.2, Math.min(3, mSize / 4));
   const layout = {
     paper_bgcolor: "transparent", plot_bgcolor: "transparent",
     margin: { l: 20, r: 20, t: 8, b: 60 },
-    xaxis: { range: [xLeft - dmax * 0.06, xRight + dmax * 0.20], color: c.text,
+    xaxis: { range: [xLo, xHi], color: c.text,
              gridcolor: "transparent", zerolinecolor: "transparent",
              tickfont: { size: 8, color: c.text }, showticklabels: false },
-    yaxis: { range: [yBot - dmax * 0.08, yMax + dmax * 0.10], color: c.text,
+    yaxis: { range: [yLo, yHi], color: c.text,
              gridcolor: "transparent", zerolinecolor: "transparent",
              tickfont: { size: 8, color: c.text }, showticklabels: false,
              scaleanchor: "x", scaleratio: 1 },
@@ -1115,14 +1292,27 @@ function renderPolar(data) {
     showlegend: false,
   };
 
-  const div = $("polar-plot");
+  const div = plotDiv;
+  // O traço 5 continua sendo o anel de seleção (os restyle dependem disso); os X
+  // vêm depois dele.
   Plotly.react(div,
-    [gridArcTrace, gridAngTrace, boundaryTrace, boundaryLinesTrace, trace, selectedTrace],
+    [gridArcTrace, gridAngTrace, boundaryTrace, boundaryLinesTrace, trace, selectedTrace, spuriousTrace],
     layout, { responsive: true, displayModeBar: false });
-  div.on("plotly_click", evt => {
-    const pt = evt.points.find(p => p.data.customdata);
-    if (!pt) return;
-    selectChirality(pt.data.customdata[pt.pointIndex]);
+  if (!div._ntbClick) {
+    div._ntbClick = true;
+    div.on("plotly_click", evt => {
+      const pt = evt.points.find(p => p.data.customdata);
+      if (!pt) return;
+      selectChirality(pt.data.customdata[pt.pointIndex]);
+    });
+  }
+}
+
+/** Os mapas desenhados: o da página e o ampliado, quando está aberto. */
+function polarDivs() {
+  return ["polar-plot", "polar-plot-big"].filter((id) => {
+    const el = document.getElementById(id);
+    return el && el.data && el.data.length > 5 && (id === "polar-plot" || $("polar-big-overlay").classList.contains("open"));
   });
 }
 
@@ -1133,7 +1323,7 @@ function selectChirality(d) {
   $("cp-atoms").textContent  = d.n_atoms;
   $("cp-strain").textContent = `${d.strain.toFixed(4)} %`;
   $("chiral-props").classList.remove("hidden");
-  Plotly.restyle("polar-plot", { x: [[d.x]], y: [[d.y]] }, [5]);
+  polarDivs().forEach((id) => Plotly.restyle(id, { x: [[d.x]], y: [[d.y]] }, [5]));
 }
 
 function onNMChange() {
@@ -1142,7 +1332,7 @@ function onNMChange() {
   const hit = state.polarData.points.find(p => p.n === n && p.m === m);
   if (hit) selectChirality(hit);
   else {
-    Plotly.restyle("polar-plot", { x: [[]], y: [[]] }, [5]);
+    polarDivs().forEach((id) => Plotly.restyle(id, { x: [[]], y: [[]] }, [5]));
     $("chiral-props").classList.add("hidden");
   }
 }
@@ -1303,6 +1493,9 @@ async function runBuild() {
     n_repeat:    parseInt($("inp-repeat").value, 10) || 1,
     vacuum:      parseFloat($("inp-vacuum").value) || 10,
     roll_inward: $("inp-rollin").checked,
+    ...((state.catalogueTube && state.catalogueTube.n === n && state.catalogueTube.m === m)
+      || (state.polarData && state.polarData.source === "catalogue")
+      ? { max_strain: 0.5 } : {}),
     ...(Object.keys(state.bondCutoffs).length ? { bond_cutoffs: state.bondCutoffs } : {}),
     ...(state.fileId  ? { file_id: state.fileId  } : {}),
     ...(state.example ? { example: state.example } : {}),
@@ -2129,6 +2322,68 @@ async function runBatch() {
   applyLang(saved);
 })();
 loadExamples();
+
+/* ---------- Aberto pelo catálogo -------------------------------------------
+ * A amostra do catálogo abre ./?catalogo=<id>&n=<n>&m=<m> numa nova aba.  A
+ * camada 2D vem como CIF de api/cat/layer/<id> e entra pelo mesmo caminho de
+ * um arquivo enviado pelo usuário; o (n,m) é marcado quando o mapa chegar. */
+(async function openFromCatalogue() {
+  const q = new URLSearchParams(location.search);
+  const id = q.get("catalogo") || q.get("catalogue");
+  if (!id || !/^\d+$/.test(id)) return;
+  try {
+    const r = await fetch(`api/cat/layer/${encodeURIComponent(id)}`);
+    if (!r.ok) throw new Error(`catálogo ${r.status}`);
+    const name = r.headers.get("X-NTB-Filename") || `catalogo_${id}.cif`;
+    const blob = await r.blob();
+    state.catalogueId = id;
+    state.catalogueFileId = undefined;
+    await handleFile(new File([blob], name, { type: "chemical/x-cif" }));
+    const n = q.get("n"), m = q.get("m");
+    if (n !== null && m !== null && /^-?\d+$/.test(n) && /^-?\d+$/.test(m)) {
+      $("inp-n").value = n;
+      $("inp-m").value = m;
+      // O tubo do catálogo é a menor célula com resíduo de até 0,5 % (e até
+      // 50 000 átomos).  Só para este (n,m) a construção usa a mesma regra.
+      state.catalogueTube = { n: +n, m: +m };
+      // O mapa polar chega depois do envio; marca o (n,m) quando ele existir.
+      // Quando o (n,m) está no mapa e a célula que o construtor escolheu não
+      // passa do teto do catálogo (50 000 átomos), constrói sozinho; acima
+      // disso fica marcado, esperando o clique.
+      let tries = 0;
+      const mark = () => {
+        if (state.polarData) {
+          onNMChange();
+          if (!$("build-btn").disabled) $("build-btn").click();
+          return;
+        }
+        if ((tries += 1) < 120) setTimeout(mark, 250);
+      };
+      mark();
+    }
+  } catch (err) {
+    toast(err.message, "err", 6000);
+  }
+})();
 renderCutoffs();
 updateActionButtons();
 refreshHistoryButtons();
+
+/* ---------- Mapa ampliado -------------------------------------------------
+ * O mapa da coluna do meio fica pequeno para centenas de pontos.  O ampliado
+ * usa o mesmo desenho num quadro quase do tamanho da tela; um clique escolhe o
+ * tubo como no pequeno, e a checagem de espúrias chega aos dois. */
+function openBigMap() {
+  if (!state.polarData) return;
+  $("polar-big-overlay").classList.add("open");
+  $("polar-big-info").textContent = $("polar-info").textContent;
+  requestAnimationFrame(() => {
+    renderPolar(state.polarData, "polar-plot-big");
+    onNMChange();
+  });
+}
+function closeBigMap() { $("polar-big-overlay").classList.remove("open"); }
+$("polar-enlarge-btn").addEventListener("click", openBigMap);
+$("polar-big-close").addEventListener("click", closeBigMap);
+$("polar-big-overlay").addEventListener("click", (ev) => { if (ev.target.id === "polar-big-overlay") closeBigMap(); });
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeBigMap(); });

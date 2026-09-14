@@ -88,7 +88,7 @@ if str(_ROOT) not in sys.path:
 from core.io import load_structure, LatticeStructure                          # noqa: E402
 from core.chirality import (scan_chirality, compute_chirality,          # noqa: E402
                             unique_sector_deg, T_options)
-from core.builder import build_nanotube, check_spurious_bonds                 # noqa: E402
+from core.builder import build_nanotube, check_curvature_bonds                # noqa: E402
 from core.exporters import (                                                   # noqa: E402
     export, write_xyz, write_pdb, write_lammps, write_poscar, write_qe,
     write_xsf, write_cp2k, write_siesta, write_cif,
@@ -211,6 +211,49 @@ app = FastAPI(
 )
 
 
+# ── Catálogo de nanotubos ───────────────────────────────────────────────────
+# Módulo próprio (api/catalogue.py) com o seu SQLite; nada do resto do site
+# muda por causa dele.  Se o banco não estiver instalado nesta máquina, as
+# rotas respondem 503 e o site segue funcionando sem a aba.
+from .catalogue import router as _cat_router, watch_requests          # noqa: E402
+
+app.include_router(_cat_router)
+
+
+@app.on_event("startup")
+async def _start_catalogue_watcher():
+    """Acompanha os pedidos em andamento e manda o e-mail ao terminarem."""
+    import asyncio
+    import os as _os
+    if _os.environ.get("NTB_NO_WATCHER"):
+        return
+    # Um worker só cuida disso: com --workers 2, dois processos mandariam o
+    # mesmo e-mail duas vezes.  O trava-porta é um arquivo, criado em modo
+    # exclusivo e apagado quando o processo sai.
+    lock = Path(_tempfile.gettempdir()) / "ntbuilder-cat-watcher.lock"
+    try:
+        fd = _os.open(str(lock), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY)
+    except FileExistsError:
+        if time.time() - lock.stat().st_mtime < 300:
+            return
+        lock.unlink(missing_ok=True)            # sobra de um processo morto
+        try:
+            fd = _os.open(str(lock), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY)
+        except FileExistsError:
+            return
+    _os.write(fd, str(_os.getpid()).encode())
+    _os.close(fd)
+
+    async def _keep_alive():
+        while True:
+            lock.touch()
+            await asyncio.sleep(60)
+
+    asyncio.create_task(_keep_alive())
+    asyncio.create_task(watch_requests())
+    _log.info("catálogo: ronda de pedidos ligada (pid %d)", _os.getpid())
+
+
 # ── Static files + SPA root ──────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
@@ -218,6 +261,18 @@ app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 @app.get("/", include_in_schema=False)
 async def root():
     return FileResponse(str(_STATIC / "index.html"))
+
+
+@app.get("/catalogo", include_in_schema=False)
+@app.get("/catalogue", include_in_schema=False)
+async def catalogue_page():
+    """A página do catálogo.
+
+    Página própria, e não uma aba dentro do construtor: ela tem URL para
+    compartilhar, e o e-mail do pedido aponta para
+    ``/catalogo?protocolo=NTB-...``, que já abre no acompanhamento.
+    """
+    return FileResponse(str(_STATIC / "catalogue.html"))
 
 
 # ── Examples ─────────────────────────────────────────────────────────────────
@@ -280,6 +335,61 @@ async def upload_structure(file: UploadFile = File(...)):
 
 
 # ── Polar map ─────────────────────────────────────────────────────────────────
+# ── Checagem de ligações espúrias em segundo plano ───────────────────────────
+_SPURIOUS_SLOTS = int(os.environ.get("NTB_SPURIOUS_SLOTS", "2"))   # por worker
+_spurious_state = {"sem": None}
+
+
+def _start_spurious_job(struct_path: Path, req: PolarRequest, points: list[dict]) -> str:
+    """Grava o job, cancela o do mapa anterior do mesmo arquivo e dispara o processo."""
+    import asyncio
+    import json as _json
+    import re as _re
+    job_id = str(uuid.uuid4())
+    job_dir = _ensure_tmp() / f"polar_{job_id}"
+    job_dir.mkdir()
+    order = sorted(points, key=lambda p: p["n_atoms"])     # os pequenos chegam primeiro
+    (job_dir / "spec.json").write_text(_json.dumps({
+        "struct_path": str(struct_path), "n_max": req.n_max,
+        "max_diameter": req.max_diameter, "roll_inward": req.roll_inward,
+        "points": [[p["n"], p["m"]] for p in order]}))
+    (job_dir / "progress.json").write_text(_json.dumps(
+        {"state": "queued", "done": 0, "total": len(order), "results": {}}))
+    # Um mapa novo do mesmo arquivo enviado cancela a checagem do anterior,
+    # também se ela estiver no outro worker (o aviso é um arquivo).  Exemplos
+    # são compartilhados entre usuários e não cancelam nada.
+    if req.file_id:
+        marker = _TMP / f"polar_last_{_re.sub(r'[^\w.-]', '_', _safe_id(req.file_id))}"
+        try:
+            prev = marker.read_text().strip()
+            if prev and prev != job_id:
+                (_TMP / f"polar_{prev}" / "cancel").touch()
+        except OSError:
+            pass
+        marker.write_text(job_id)
+    asyncio.get_running_loop().create_task(_run_spurious(job_dir))
+    return job_id
+
+
+async def _run_spurious(job_dir: Path) -> None:
+    import asyncio
+    import subprocess as _sp
+    if _spurious_state["sem"] is None:
+        _spurious_state["sem"] = asyncio.Semaphore(_SPURIOUS_SLOTS)
+    async with _spurious_state["sem"]:
+        if (job_dir / "cancel").exists():
+            return
+        env = dict(os.environ, OMP_NUM_THREADS="1")
+        try:
+            with open(job_dir / "log.txt", "ab") as log:
+                proc = await asyncio.create_subprocess_exec(
+                    "nice", "-n", "10", sys.executable, str(_HERE / "polar_spurious.py"), str(job_dir),
+                    env=env, stdout=log, stderr=_sp.STDOUT)
+            await proc.wait()
+        except Exception:
+            _log.exception("checagem de espúrias %s", job_dir.name)
+
+
 @app.post("/api/polar")
 async def polar_map(req: PolarRequest):
     """Compute all valid (n,m) chiralities and return Plotly-ready scatter data."""
@@ -312,11 +422,6 @@ async def polar_map(req: PolarRequest):
     # flat (non-buckled) structure there can be no curvature-induced
     # spurious bonds, so we skip the per-point construction entirely.
     needs_spurious_check = structure.has_buckling
-    if needs_spurious_check:
-        # Local imports keep the cold-start cost of /api/polar low for the
-        # common flat-structure case (graphene, biphenylene, …).
-        from core.builder import build_nanotube as _bn
-        from core.builder import check_spurious_bonds as _csb
 
     # Where the wedge begins.  unique_sector_deg gives its opening angle only:
     # the fundamental domain is that many degrees wide, but it starts at zero
@@ -367,19 +472,14 @@ async def polar_map(req: PolarRequest):
         # physically meaningful — flat (non-buckled) lattices cannot
         # develop curvature-induced bonds, so omitting the field there
         # tells the frontend to suppress the legend entirely.
-        if needs_spurious_check:
-            spurious_pairs: list[str] = []
-            try:
-                _nt = _bn(structure, r, vacuum=0.0,
-                          roll_inward=req.roll_inward)
-                sp  = _csb(structure, _nt)
-                spurious_pairs = sorted("-".join(sorted(p)) for p in sp)
-            except Exception:
-                # Construction failures (e.g. (n,m) collapsed by snap) are
-                # not curvature issues; leave the marker as a regular dot.
-                spurious_pairs = []
-            point["spurious"] = spurious_pairs
         points.append(point)
+
+    # A checagem de ligações espúrias monta cada tubo, e numa camada ondulada
+    # de rede oblíqua isso passava de 2 min (504 no nginx).  Ela vai para um
+    # processo à parte; a página busca o resultado em /api/polar/spurious/<job>.
+    spurious_job = None
+    if needs_spurious_check and points:
+        spurious_job = _start_spurious_job(struct_path, req, points)
 
     return {
         "points":        points,
@@ -396,7 +496,22 @@ async def polar_map(req: PolarRequest):
         "species":       list({a["symbol"] for a in structure.atoms}),
         "d_min":         round(structure.d_min, 4),
         "snap_desc":     snap_desc,
+        "spurious_job":   spurious_job,
+        "spurious_total": len(points) if spurious_job else 0,
     }
+
+
+@app.get("/api/polar/spurious/{job_id}")
+async def polar_spurious(job_id: str):
+    """Progresso da checagem de ligações espúrias de um mapa (resultados até agora)."""
+    import json as _json
+    path = _TMP / f"polar_{_safe_id(job_id)}" / "progress.json"
+    if not path.exists():
+        raise HTTPException(404, "spurious-bond job not found")
+    try:
+        return _json.loads(path.read_text())
+    except ValueError:                       # nunca deveria: a escrita é atômica
+        return {"state": "running", "done": 0, "total": 0, "results": {}}
 
 
 # ── Build ─────────────────────────────────────────────────────────────────────
@@ -484,11 +599,15 @@ async def build(req: BuildRequest):
     # Spurious-bond check (requires scipy; silently skip if not installed)
     warning: Optional[str] = None
     try:
-        spurious = check_spurious_bonds(structure, nt)
-        if spurious:
-            pairs = ", ".join("-".join(sorted(p)) for p in spurious)
+        formed, broken = check_curvature_bonds(structure, chirality, roll_inward=req.roll_inward)
+        if formed or broken:
+            parts = []
+            if formed:
+                parts.append("formed " + ", ".join("-".join(sorted(p)) for p in sorted(formed, key=sorted)))
+            if broken:
+                parts.append("broken " + ", ".join("-".join(sorted(p)) for p in sorted(broken, key=sorted)))
             warning = (
-                f"Curvature-induced spurious bonds detected ({pairs}). "
+                f"Curvature-induced bond artefacts detected ({'; '.join(parts)}). "
                 "Consider using a larger diameter (higher n,m)."
             )
     except ImportError:

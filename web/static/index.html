@@ -31,6 +31,7 @@
       </div>
     </a>
     <nav class="nav" aria-label="Group navigation">
+      <a href="catalogo" data-i18n="nav.catalogue">Catálogo de nanotubos</a>
       <a href="https://nanoeng.unb.br/" target="_blank" rel="noopener" data-i18n="nav.nanoeng">NanoEng</a>
     </nav>
     <div class="site-header__spacer"></div>
@@ -104,11 +105,11 @@
         <div class="nm-inputs">
           <div style="flex:1;">
             <label style="text-align:center">n</label>
-            <input type="number" id="inp-n" min="0" max="100" value="5" />
+            <input type="number" id="inp-n" min="-100" max="100" value="5" />
           </div>
           <div style="flex:1;">
             <label style="text-align:center">m</label>
-            <input type="number" id="inp-m" min="0" max="100" value="5" />
+            <input type="number" id="inp-m" min="-100" max="100" value="5" />
           </div>
         </div>
         <div id="chiral-props" class="hidden">
@@ -231,6 +232,7 @@
           <span style="font-weight:400;text-transform:none;letter-spacing:0;" data-i18n="map.hint">clique para escolher (n,m)</span>
           <span style="flex:1;"></span>
           <span id="polar-info" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--c-muted);"></span>
+          <button class="btn-icon" id="polar-enlarge-btn" data-i18n-title="map.enlarge" title="Ampliar mapa" style="padding:2px 8px;">⤢</button>
           <button class="btn-icon" id="polar-refresh-btn" data-i18n-title="map.refresh" title="Recalcular mapa" style="padding:2px 8px;">↻</button>
         </div>
         <div class="map-controls">
@@ -560,6 +562,16 @@
   </div>
 </div>
 
-<script src="static/app.js"></script>
+<div id="polar-big-overlay" class="modal-overlay">
+  <div class="modal-box modal-box--map" role="dialog" aria-modal="true">
+    <div class="polar-big__head">
+      <span data-i18n="map.bigTitle">Mapa de quiralidade</span>
+      <span id="polar-big-info"></span>
+      <button type="button" class="btn-icon" id="polar-big-close" aria-label="Fechar">×</button>
+    </div>
+    <div id="polar-plot-big"></div>
+  </div>
+</div>
+<script src="static/app.js?v=20260913j"></script>
 </body>
 </html>

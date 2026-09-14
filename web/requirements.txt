@@ -9,4 +9,5 @@ python-multipart>=0.0.9    # required for UploadFile
 # Core deps (same as desktop app)
 numpy>=1.24.0
 gemmi>=0.6.4               # CIF reader
-scipy>=1.11.0              # optional but recommended — enables spurious-bond detection
+scipy>=1.11.0              # bond detection and the curvature bond check
+spglib>=2.0                # primitive-cell reduction
