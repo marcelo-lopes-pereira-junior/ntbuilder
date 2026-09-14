@@ -1251,3 +1251,48 @@ class TestCurvatureBonds:
         from core.builder import curvature_tokens
         tokens = curvature_tokens({frozenset({"S"}), frozenset({"Mo", "S"})}, {frozenset({"Mo"})})
         assert tokens == ["+Mo-S", "+S-S", "-Mo-Mo"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. TestMWNTSpacing — the scaled MWNT gap is surface to surface
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestMWNTSpacing:
+
+    @staticmethod
+    def _wall_gap(result):
+        """Smallest atom-atom distance between neighbouring walls, periodic along z."""
+        from scipy.spatial import cKDTree
+        X = result.nanotube.coords
+        c = X[:, :2].mean(axis=0)
+        r = np.hypot(X[:, 0] - c[0], X[:, 1] - c[1])
+        Rw = sorted(w.diameter / 2 for w in result.walls)
+        wid = np.digitize(r, [(Rw[i] + Rw[i + 1]) / 2 for i in range(len(Rw) - 1)])
+        Lz = result.nanotube.box[2]
+        aug = np.vstack([X + [0, 0, k * Lz] for k in (-1, 0, 1)])
+        awid = np.tile(wid, 3)
+        return min(cKDTree(aug[awid == i + 1]).query(X[wid == i])[0].min()
+                   for i in range(len(Rw) - 1))
+
+    def test_flat_layer_unchanged(self):
+        from core.mwnt import build_mwnt_scaled, plan_scaled_walls
+        s = _graphene()
+        ch = compute_chirality(5, 5, s)
+        plans = plan_scaled_walls(ch, 3, 3.4, thickness=0.0)
+        assert [p.k for p in plans] == [5, 10, 15]
+        res = build_mwnt_scaled(s, ch, 3, 3.4, 10.0, False)
+        assert abs(self._wall_gap(res) - 3.39) < 0.05
+
+    def test_thick_layer_keeps_the_gap(self):
+        # A 6 A thick layer: without the thickness in the step, walls 3.4 A apart
+        # at their mid-surfaces overlap by 2.6 A.
+        from core.mwnt import build_mwnt_scaled, layer_thickness
+        s = _thick_bilayer()
+        assert abs(layer_thickness(s) - 6.0) < 1e-9
+        ch = compute_chirality(5, 5, s)
+        res = build_mwnt_scaled(s, ch, 3, 3.4, 10.0, False)
+        step = ch.diameter / 5 / 2                     # the radius step of the (1,1) family
+        assert self._wall_gap(res) > 3.4 - step / 2 - 0.1
+        for w_in, w_out in zip(res.walls, res.walls[1:]):
+            gap = (w_out.diameter - w_in.diameter) / 2 - 6.0
+            assert abs(gap - 3.4) <= step / 2 + 1e-9

@@ -952,7 +952,7 @@ async def mwnt(req: MWNTRequest):
     Returns the wall plan plus a job_id so the merged structure can be
     downloaded via the standard /api/download/{job_id}/{fmt} endpoint.
     """
-    from core.mwnt import plan_scaled_walls, build_mwnt_scaled
+    from core.mwnt import plan_scaled_walls, build_mwnt_scaled, layer_thickness
 
     struct_path = _resolve_struct(req.file_id, req.example)
     try:
@@ -969,7 +969,8 @@ async def mwnt(req: MWNTRequest):
         raise HTTPException(400, "(n=0, m=0) is degenerate.")
 
     plans = plan_scaled_walls(inner, req.n_walls,
-                              interlayer_spacing=req.interlayer_spacing)
+                              interlayer_spacing=req.interlayer_spacing,
+                              thickness=layer_thickness(structure))
     try:
         result = build_mwnt_scaled(
             structure, inner,

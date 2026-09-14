@@ -375,6 +375,7 @@ class MainWindow(QMainWindow):
             from core import compute_chirality
             from core.mwnt import (
                 plan_scaled_walls, build_mwnt_scaled, scaled_mwnt_warning,
+                layer_thickness,
             )
 
             tol = (self.input_panel.max_strain()
@@ -388,6 +389,7 @@ class MainWindow(QMainWindow):
             # ── Plan first so we can show the user the scaling before building.
             plans = plan_scaled_walls(
                 inner_ch, n_walls, interlayer_spacing=spacing,
+                thickness=layer_thickness(self._structure),
             )
 
             self.statusBar().showMessage(

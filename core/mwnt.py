@@ -11,7 +11,9 @@ NanotubeStructure ready for export.
 Algorithm
 ---------
 1.  Inner wall diameter d₀ is known from the user's (n,m) selection.
-2.  For wall k, the target diameter is d_target = d₀ + 2k · spacing.
+2.  For wall k, the target diameter is d_target = d₀ + 2k · (spacing + t),
+    t the thickness of the layer: the spacing is the gap between the outer
+    atoms of one wall and the inner atoms of the next.
 3.  We scan all (n,m) with diameter near d_target and pick the best match.
 4.  Each wall is built independently (vacuum=0) so atoms are centred at
     the tube axis origin (0,0) before the box shift.
@@ -29,6 +31,12 @@ import numpy as np
 from .io import LatticeStructure
 from .chirality import ChiralityResult, compute_chirality, scan_chirality
 from .builder import NanotubeStructure, build_nanotube
+
+
+def layer_thickness(structure: LatticeStructure) -> float:
+    """Thickness of the layer: the spread of the atoms' out-of-plane offsets (Å)."""
+    zs = [float(a.get("z", 0.0)) for a in structure.atoms]
+    return (max(zs) - min(zs)) if zs else 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,8 +247,13 @@ def _merge_walls(
     inner_chirality:    ChiralityResult,
     interlayer_spacing: float,
     vacuum:             float,
+    thickness:          float = 0.0,
 ) -> MWNTResult:
-    """Internal: merge pre-built per-wall NanotubeStructures into one MWNT."""
+    """Internal: merge pre-built per-wall NanotubeStructures into one MWNT.
+
+    ``thickness`` is the layer thickness: diameters are those of the walls'
+    mid-surfaces, so the gap between walls is the radius step less it.
+    """
     n_walls  = len(raw_walls)
     Lz_walls = [float(nt.box[2]) for nt in raw_walls]
     Lz_ref   = max(Lz_walls)
@@ -273,7 +286,7 @@ def _merge_walls(
         all_symbols.extend(syms_k)
         all_coords.append(coords_k)
 
-        target_d = inner_chirality.diameter + 2.0 * k * interlayer_spacing
+        target_d = inner_chirality.diameter + 2.0 * k * (interlayer_spacing + thickness)
         wall_infos.append(WallInfo(
             index=k,
             n=ch.n, m=ch.m,
@@ -286,7 +299,9 @@ def _merge_walls(
         ))
 
     merged_coords = np.vstack(all_coords)
-    outer_r  = chiralities[-1].diameter / 2.0
+    # The box from the atoms, not the outer mid-surface: a thick layer puts its
+    # outer atoms t/2 beyond it, which the vacuum would otherwise lose.
+    outer_r  = float(np.hypot(merged_coords[:, 0], merged_coords[:, 1]).max())
     box_xy   = outer_r * 2.0 + vacuum
     merged_coords[:, 0] += box_xy / 2.0
     merged_coords[:, 1] += box_xy / 2.0
@@ -301,7 +316,7 @@ def _merge_walls(
 
     if n_walls > 1:
         spacings = [
-            (chiralities[k].diameter - chiralities[k - 1].diameter) / 2.0
+            (chiralities[k].diameter - chiralities[k - 1].diameter) / 2.0 - thickness
             for k in range(1, n_walls)
         ]
         mean_spacing = float(np.mean(spacings))
@@ -396,14 +411,15 @@ class ScaledWallPlan:
     n:               int      # = k * n_inner
     m:               int      # = k * m_inner
     diameter:        float    # = k * d_inner (Å)
-    target_diameter: float    # ideal diameter = d_inner + 2·index·spacing
-    actual_spacing:  float    # gap to the previous wall, in Å
+    target_diameter: float    # ideal diameter = d_inner + 2·index·(spacing + thickness)
+    actual_spacing:  float    # gap from the previous wall's outer atoms to this wall's inner atoms, Å
 
 
 def plan_scaled_walls(
     inner_chirality:    ChiralityResult,
     n_walls:            int,
     interlayer_spacing: float = 3.4,
+    thickness:          float = 0.0,
 ) -> list[ScaledWallPlan]:
     """
     Compute the integer-scaled (n,m) for each wall of a MWNT.
@@ -436,15 +452,23 @@ def plan_scaled_walls(
        would be violated (``k_i ≤ k_{i-1}``), ``k_i`` is incremented.
     3. Wall i uses ``(k_i · n₀, k_i · m₀)``.
 
-    The realised interlayer spacing is reported in
-    :func:`scaled_mwnt_warning` so the user knows the deviation from
-    the requested value.
+    The spacing is surface to surface: diameters are those of the walls'
+    mid-surfaces, so a layer of thickness t needs a radius step of
+    spacing + t.  Without it the 3.4 A asked for MoS2 (t = 3.13 A) left
+    0.5 A between the sulfur of neighbouring walls.
+
+    The radius can only move in steps of d_primitive / 2 along the ray, so
+    the realised gap is quantised: 3.39 A for the (1,1) family of graphene,
+    3.13 to 3.52 A for (1,0), 2.74 to 5.48 A for (5,3).  It is reported in
+    :func:`scaled_mwnt_warning` so the user knows the deviation from the
+    requested value.
 
     Parameters
     ----------
     inner_chirality    : chirality of the innermost wall.
     n_walls            : total number of walls (≥ 1).
     interlayer_spacing : requested surface-to-surface gap in Å.
+    thickness          : layer thickness in Å (layer_thickness(structure)).
 
     Returns
     -------
@@ -470,7 +494,7 @@ def plan_scaled_walls(
     plans: list[ScaledWallPlan] = []
     prev_k = 0
     for i in range(n_walls):
-        target_d = d_inner + 2.0 * i * interlayer_spacing
+        target_d = d_inner + 2.0 * i * (interlayer_spacing + thickness)
         if i == 0:
             k = k_inner
         else:
@@ -483,7 +507,7 @@ def plan_scaled_walls(
                 k = prev_k + 1
         diameter   = k * d_primitive
         prev_d     = plans[-1].diameter if plans else 0.0
-        actual_gap = (diameter - prev_d) / 2.0 if i > 0 else float("nan")
+        actual_gap = (diameter - prev_d) / 2.0 - thickness if i > 0 else float("nan")
         plans.append(ScaledWallPlan(
             index           = i,
             k               = k,
@@ -554,8 +578,8 @@ def build_mwnt_scaled(
       walls;
     * produces walls with strictly identical axial periodicity, so the
       merged supercell is exactly commensurate along Z;
-    * may deviate from the requested interlayer spacing by up to half a
-      bond length; the realised values are reported via
+    * realises a spacing quantised in steps of d_primitive / 2 around the
+      requested one (see :func:`plan_scaled_walls`), reported via
       :func:`scaled_mwnt_warning`.
 
     Heterostructure / mismatched MWNTs (different (n,m) directions per
@@ -564,8 +588,10 @@ def build_mwnt_scaled(
 
     Parameters mirror :func:`build_mwnt`.
     """
+    thickness = layer_thickness(structure)
     plans = plan_scaled_walls(
         inner_chirality, n_walls, interlayer_spacing=interlayer_spacing,
+        thickness=thickness,
     )
 
     # ── Compute ChiralityResult for each scaled wall ────────────────────────
@@ -591,6 +617,7 @@ def build_mwnt_scaled(
         inner_chirality    = inner_chirality,
         interlayer_spacing = interlayer_spacing,
         vacuum             = vacuum,
+        thickness          = thickness,
     )
 
 
