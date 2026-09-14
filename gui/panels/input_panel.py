@@ -314,6 +314,14 @@ class InputPanel(QWidget):
         foot.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(foot)
 
+        # The horizontal scroll bar is off, so a column narrower than its content
+        # cuts the right edge (269 px of content in the 240 px the splitter gave
+        # it).  Floor the width at the content plus the vertical scroll bar,
+        # whatever the font makes that.
+        need = inner.minimumSizeHint().width() + scroll.verticalScrollBar().sizeHint().width()
+        self.setMinimumWidth(max(230, need))
+        self.setMaximumWidth(max(310, need))
+
     # ─────────────────────────────────────────────────────────────────────────
     # Slots
     # ─────────────────────────────────────────────────────────────────────────
