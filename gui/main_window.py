@@ -28,7 +28,7 @@ from PyQt6.QtGui     import QPixmap, QAction, QIcon
 from PyQt6.QtWidgets import (
     QMainWindow, QSplitter, QWidget, QVBoxLayout,
     QStatusBar, QMessageBox, QLabel, QDialog,
-    QHBoxLayout, QPushButton, QFileDialog,
+    QHBoxLayout, QPushButton, QFileDialog, QScrollArea, QFrame,
 )
 
 from .utils import load_pixmap as _load_pixmap, ScalablePixmapLabel
@@ -90,13 +90,28 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self.statusBar().showMessage("Ready — load a structure file to begin.")
 
-        # Maximise after the UI is fully built so resizeEvent has valid state
-        self.resize(1400, 820)
+        # Maximise after the UI is fully built so resizeEvent has valid state.
+        # The normal size is clamped to the screen for the same Wayland reason.
+        w, h = 1400, 820
+        screen = self.screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            w, h = min(w, avail.width()), min(h, avail.height())
+        self.resize(w, h)
         self.showMaximized()
 
     # ─────────────────────────────────────────────────────────────────────────
     # UI construction
     # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _scrollable(panel: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setWidget(panel)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setMinimumSize(200, 150)
+        return area
 
     def _build_ui(self):
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -106,9 +121,17 @@ class MainWindow(QMainWindow):
         self.polar_panel  = PolarPanel()
         self.viewer_panel = ViewerPanel()
 
+        # The map and viewer panels sit in scroll areas so that their contents
+        # never set the window's minimum size.  Unwrapped, the "Display" row
+        # (666 px), "Map settings" (573 px) and the viewer's stacked groups
+        # (706 px tall) asked for at least 1501 x 780 px, 1610 x 800 with the
+        # fonts of a Linux laptop, and on Wayland a maximized window larger
+        # than the screen is a protocol error that kills the program
+        # ("xdg_surface buffer (1610 x 800) does not match the configured
+        # maximized state (1280 x 752)").  The input panel already scrolls.
         splitter.addWidget(self.input_panel)
-        splitter.addWidget(self.polar_panel)
-        splitter.addWidget(self.viewer_panel)
+        splitter.addWidget(self._scrollable(self.polar_panel))
+        splitter.addWidget(self._scrollable(self.viewer_panel))
 
         # Proportions: 22% | 38% | 40%
         splitter.setSizes([240, 420, 440])
@@ -319,7 +342,7 @@ class MainWindow(QMainWindow):
 
             # Bond validation for buckled/layered structures
             if self._structure.has_buckling:
-                self._check_spurious_bonds()
+                self._check_spurious_bonds(chirality, roll_inward)
 
         except Exception as exc:
             QMessageBox.critical(self, "Build error",
@@ -468,29 +491,34 @@ class MainWindow(QMainWindow):
                                  f"{type(exc).__name__}: {exc}\n\n"
                                  + traceback.format_exc())
 
-    def _check_spurious_bonds(self):
-        """Warn if the nanotube contains bonds absent from the flat 2D structure."""
+    def _check_spurious_bonds(self, chirality, roll_inward: bool):
+        """Warn if rolling forms bonds absent from the flat sheet or breaks bonds of it."""
         try:
-            from core.builder import check_spurious_bonds
-            spurious = check_spurious_bonds(
-                self._structure, self._nanotube,
+            from core.builder import check_curvature_bonds
+            formed, broken = check_curvature_bonds(
+                self._structure, chirality, roll_inward=roll_inward,
                 settings=self.viewer_panel.bond_settings,
             )
-            if not spurious:
+            if not formed and not broken:
                 return
 
-            pairs = sorted(
-                "–".join(sorted(p)) for p in spurious
-            )
+            def names(pairs):
+                return ",  ".join(sorted("–".join(sorted(p)) for p in pairs))
+            parts = []
+            if formed:
+                parts.append("<b>Formed</b> (closer than the bond cutoff in the tube, "
+                             f"not bonded in the flat sheet):<br>&nbsp;&nbsp;<b>{names(formed)}</b>")
+            if broken:
+                parts.append("<b>Broken</b> (bonded in the flat sheet, stretched past "
+                             f"the cutoff in the tube):<br>&nbsp;&nbsp;<b>{names(broken)}</b>")
             msg = (
                 "<b>⚠ Spurious bonds detected</b><br><br>"
-                "The following bond types appear in the 3D nanotube but do "
-                "<i>not</i> exist in the flat 2D structure:<br><br>"
-                f"&nbsp;&nbsp;<b>{',  '.join(pairs)}</b><br><br>"
-                "This usually means the nanotube diameter is too small for "
-                "this material — atoms from opposite sides of the tube, or "
-                "from different layers, are getting close enough to appear "
-                "bonded. Consider using larger (n,&nbsp;m) indices."
+                + "<br><br>".join(parts) + "<br><br>"
+                "Each pair of atoms is compared with the same pair in the flat "
+                "2D structure, with a 10 % margin on the cutoff. Formed bonds "
+                "come from atoms of opposite walls or layers squeezed together, "
+                "broken bonds from the outer face being stretched by the "
+                "curvature. Consider using larger (n,&nbsp;m) indices."
             )
             QMessageBox.warning(self, "Bond validation warning", msg)
         except Exception:

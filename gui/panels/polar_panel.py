@@ -110,7 +110,7 @@ from matplotlib.figure import Figure
 
 from core import LatticeStructure, scan_chirality
 from core.chirality import unique_sector_deg
-from core.builder   import build_nanotube, check_spurious_bonds
+from core.builder   import build_nanotube, check_curvature_bonds, curvature_tokens
 
 
 
@@ -493,14 +493,11 @@ class PolarPanel(QWidget):
                 key = (r.n, r.m, roll_inward)
                 if key not in self._spurious_cache:
                     try:
-                        _nt = build_nanotube(
-                            self._structure, r,
-                            vacuum=0.0, roll_inward=roll_inward,
-                        )
-                        sp  = check_spurious_bonds(self._structure, _nt)
-                        self._spurious_cache[key] = sorted(
-                            "-".join(sorted(p)) for p in sp
-                        )
+                        # Formed (+A-B) and broken (-A-B) bonds, pair by pair,
+                        # the same check as the web builder and the catalogue.
+                        self._spurious_cache[key] = curvature_tokens(
+                            *check_curvature_bonds(self._structure, r,
+                                                   roll_inward=roll_inward))
                     except Exception:
                         self._spurious_cache[key] = []
                 if self._spurious_cache[key]:
