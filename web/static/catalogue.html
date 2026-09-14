@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="pt" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Catálogo de nanotubos — NTBuilder | NanoEng (UnB)</title>
+  <meta name="description" content="Catálogo de 20,3 milhões de nanotubos construídos a partir de 46 403 Sistemas 2D de oito Bases de Dados 2D, sem estruturas repetidas. Filtre por elementos, espessura, diâmetro, cavidade, tamanho de célula, quiralidade e ligações espúrias, e baixe a seleção na hora ou receba o link por e-mail." />
+  <meta name="theme-color" content="#0A2540" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" />
+  <link rel="stylesheet" href="static/style.css" />
+  <link rel="stylesheet" href="static/catalogue.css?v=20260913b" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="brand" href="./" aria-label="NTBuilder">
+      <img class="brand__logo" src="static/ntbuilder.png" alt="" />
+      <div class="brand__title">
+        <span class="brand__name">NTBuilder</span>
+        <span class="brand__sub">NanoEng · UnB</span>
+      </div>
+    </a>
+    <nav class="nav" aria-label="Navegação">
+      <a href="./" data-i18n="nav.builder">Construtor</a>
+      <a href="catalogo" class="is-active" data-i18n="nav.catalogue">Catálogo</a>
+      <a href="https://nanoeng.unb.br/ferramentas.html" target="_blank" rel="noopener" data-i18n="nav.tools">Ferramentas</a>
+    </nav>
+    <div class="site-header__spacer"></div>
+    <div class="site-header__tools">
+      <div class="lang-toggle" role="group" aria-label="Idioma">
+        <button type="button" data-lang="pt" aria-pressed="true" class="active">PT</button>
+        <button type="button" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+      <button class="btn-icon" id="theme-toggle-btn" title="Tema claro ou escuro">☀</button>
+      <img class="brand__unb" src="static/unb.png" alt="UnB" />
+    </div>
+  </div>
+</header>
+
+<main id="cat-main">
+
+  <!-- 1. Apresentação e elementos, ao lado da Base de Dados 2D -->
+  <div class="cat-top">
+    <div class="cat-top__main">
+      <section class="card cat-hero">
+        <h1 data-i18n="hero.title">Catálogo de nanotubos</h1>
+        <p class="cat-lead" data-i18n="hero.lead"></p>
+        <a href="#cat-explain" class="cat-link" data-i18n="hero.more">Como o catálogo funciona</a>
+      </section>
+
+      <section class="card cat-ptable" id="cat-ptable">
+        <div class="cat-ptable__head">
+          <div class="panel-title" data-i18n="pt.title">Elementos</div>
+          <label class="switch">
+            <input type="checkbox" id="pt-exclude-toggle" />
+            <span class="switch__track"><span class="switch__knob"></span></span>
+            <span data-i18n="pt.excludeSwitch">Excluir elementos</span>
+          </label>
+        </div>
+        <div class="pt-fields">
+          <div class="pt-field is-active" data-mode="in" id="pt-field-in">
+            <div class="pt-field__label"><span class="pt-dot pt-dot--in"></span><span data-i18n="pt.in">Contém</span></div>
+            <div class="pt-field__box" id="pt-box-in"><input class="pt-field__input" id="pt-input-in" autocomplete="off" spellcheck="false" aria-label="Contém" /></div>
+          </div>
+          <div class="pt-field hidden" data-mode="out" id="pt-field-out">
+            <div class="pt-field__label"><span class="pt-dot pt-dot--out"></span><span data-i18n="pt.out">Não contém</span></div>
+            <div class="pt-field__box" id="pt-box-out"><input class="pt-field__input" id="pt-input-out" autocomplete="off" spellcheck="false" aria-label="Não contém" /></div>
+          </div>
+        </div>
+        <p class="cat-hint pt-help" id="pt-help" data-i18n="pt.help"></p>
+        <div class="ptable-wrap"><div class="ptable" id="ptable" role="group" aria-label="Tabela periódica"></div></div>
+        <div class="cat-ptable__foot">
+          <div class="cat-ptable__legend">
+            <span class="pt-key pt-key--in"></span><span data-i18n="pt.in">Contém</span>
+            <span class="pt-key pt-key--out"></span><span data-i18n="pt.out">Não contém</span>
+            <span class="pt-key pt-key--dim"></span><span data-i18n="pt.dim">Não combina com a seleção</span>
+            <span class="pt-key pt-key--none"></span><span data-i18n="pt.absent">Não está no banco</span>
+          </div>
+          <button type="button" class="cat-link" id="pt-clear" data-i18n="pt.clear">Limpar elementos</button>
+        </div>
+        <div class="cat-classes">
+          <div class="cat-classes__row">
+            <span class="cat-classes__label"><span class="pt-dot pt-dot--out"></span><span data-i18n="pt.classesOut">Excluir classes</span></span>
+            <div class="pills pills--sm pills--out" id="pt-classes-out"></div>
+          </div>
+          <span class="cat-hint cat-classes__hint" data-i18n="pt.classesHint"></span>
+        </div>
+      </section>
+    </div>
+
+    <aside class="card cat-dbcard">
+      <div class="cat-side__title" data-i18n="db.title">Base de Dados 2D</div>
+      <div class="cat-dbs" id="f-sources"></div>
+      <div class="cat-stats">
+        <div class="cat-stat"><span class="cat-stat__l" data-i18n="stat.systems">Sistemas 2D</span><span class="cat-stat__n" id="stat-systems">—</span></div>
+        <div class="cat-stat"><span class="cat-stat__l" data-i18n="stat.tubes">Nanotubos</span><span class="cat-stat__n" id="stat-tubes">—</span></div>
+        <div class="cat-stat"><span class="cat-stat__l" data-i18n="stat.exact">Com célula exata</span><span class="cat-stat__n" id="stat-exact">—</span><span class="cat-stat__p" id="stat-exact-p"></span></div>
+        <div class="cat-stat"><span class="cat-stat__l" data-i18n="stat.clean">Sem ligação espúria</span><span class="cat-stat__n" id="stat-clean">—</span><span class="cat-stat__p" id="stat-clean-p"></span></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 2. Filtro, ao lado da contagem e da amostra -->
+  <div class="cat-grid">
+    <section class="card cat-filter" id="cat-filter">
+      <div class="panel-title cat-center" data-i18n="filter.title">Filtro</div>
+
+      <div class="cat-field cat-field--center">
+        <div class="cat-label-row">
+          <span class="cat-label" data-i18n="filter.lattices">Classe de rede</span>
+          <button type="button" class="cat-help" id="lat-help" data-i18n="filter.latHelp">O que é</button>
+        </div>
+        <div class="pills" id="f-lattices"></div>
+      </div>
+
+      <div class="cat-field">
+        <div class="cat-label-row"><span class="cat-label" data-i18n="filter.thickness">Espessura da camada</span><span class="cat-value" id="v-thick"></span></div>
+        <div class="range2">
+          <div class="range2__track"><div class="range2__fill" id="f-thick-fill"></div></div>
+          <input type="range" id="f-t-min" min="0" max="12" step="1" value="0" aria-label="Espessura mínima" />
+          <input type="range" id="f-t-max" min="0" max="12" step="1" value="12" aria-label="Espessura máxima" />
+        </div>
+        <span class="cat-hint" data-i18n="filter.thickHint"></span>
+      </div>
+
+      <div class="cat-field">
+        <div class="cat-label-row"><span class="cat-label" data-i18n="filter.diameter">Diâmetro</span><span class="cat-value" id="v-diam"></span></div>
+        <div class="range2">
+          <div class="range2__track"><div class="range2__fill" id="f-diam-fill"></div></div>
+          <input type="range" id="f-d-min" min="0" max="80" step="1" value="0" aria-label="Diâmetro mínimo" />
+          <input type="range" id="f-d-max" min="0" max="80" step="1" value="80" aria-label="Diâmetro máximo" />
+        </div>
+      </div>
+
+      <div class="cat-field">
+        <div class="cat-label-row"><span class="cat-label" data-i18n="filter.cavity">Cavidade interna mínima</span><span class="cat-value" id="v-din"></span></div>
+        <input type="range" class="range1" id="f-din" min="0" max="3" step="1" value="0" />
+        <div class="ticks"><span>0</span><span>5</span><span>10</span><span>20</span></div>
+        <span class="cat-hint" data-i18n="filter.cavityHint"></span>
+      </div>
+
+      <div class="cat-field">
+        <div class="cat-label-row"><span class="cat-label" data-i18n="filter.atoms">Átomos por célula</span><span class="cat-value" id="v-atoms"></span></div>
+        <input type="range" class="range1" id="f-atoms" min="0" max="8" step="1" value="8" />
+        <div class="ticks"><span>100</span><span>200</span><span>500</span><span>1k</span><span>2k</span><span>5k</span><span>10k</span><span>20k</span><span>50k</span></div>
+      </div>
+
+      <div class="cat-field">
+        <div class="cat-label-row"><span class="cat-label" data-i18n="filter.eps">Resíduo de periodicidade</span><span class="cat-value" id="v-eps"></span></div>
+        <input type="range" class="range1" id="f-eps" min="0" max="3" step="1" value="3" />
+        <div class="ticks"><span data-i18n="filter.epsExact">Exato</span><span>0,1 %</span><span>0,2 %</span><span>0,5 %</span></div>
+      </div>
+
+      <div class="cat-field cat-field--center">
+        <div class="cat-label" data-i18n="filter.chirality">Quiralidade</div>
+        <div class="pills" id="f-chirality">
+          <button type="button" class="pill is-on" data-v="achiral" data-i18n="filter.achiral">Aquiral</button>
+          <button type="button" class="pill is-on" data-v="chiral" data-i18n="filter.chiral">Quiral</button>
+        </div>
+        <span class="cat-hint" data-i18n="filter.chirHint"></span>
+      </div>
+
+      <div class="cat-field cat-field--center">
+        <div class="cat-label" data-i18n="filter.bonds">Ligações espúrias</div>
+        <div class="seg" id="f-clean" role="radiogroup">
+          <button type="button" class="is-on" data-v="clean" data-i18n="filter.clean">Sem ligação espúria</button>
+          <button type="button" data-v="all" data-i18n="filter.cleanAll">Todos os tubos</button>
+        </div>
+      </div>
+
+      <button type="button" class="btn-secondary cat-reset" id="btn-reset" data-i18n="filter.reset">Limpar filtros</button>
+    </section>
+
+    <section class="card cat-result">
+      <div class="cat-count" id="cat-count">
+        <div class="cat-count__head">
+          <div>
+            <div class="cat-count__label" data-i18n="count.tubes">Tubos na seleção</div>
+            <div class="cat-count__n" id="c-tubes">—</div>
+          </div>
+          <div class="cat-count__tiles">
+            <div><span class="cat-tile__n" id="c-atoms">—</span><span class="cat-tile__l" data-i18n="count.atoms">Átomos</span></div>
+            <div><span class="cat-tile__n" id="c-size">—</span><span class="cat-tile__l" data-i18n="count.size">Arquivo compactado</span></div>
+            <div><span class="cat-tile__n" id="c-time">—</span><span class="cat-tile__l" data-i18n="count.time">Construção</span></div>
+          </div>
+        </div>
+        <div class="cat-count__foot">
+          <span id="c-exact-badge" class="cat-badge"></span>
+          <span id="c-ms" class="cat-hint"></span>
+          <a href="#cat-request" class="cat-link cat-goto" data-i18n="count.goto">Ir para o pedido</a>
+        </div>
+      </div>
+
+      <div class="cat-sample" id="cat-sample">
+        <div class="cat-sample__head">
+          <div class="panel-title" data-i18n="sample.title">Amostra da seleção</div>
+          <span class="cat-hint" id="sample-info"></span>
+        </div>
+        <p class="cat-hint cat-sample__note" data-i18n="sample.note"></p>
+        <div class="cat-table-wrap">
+          <table class="cat-table is-clean" id="sample-table">
+            <thead><tr>
+              <th data-i18n="sample.system">Sistema 2D</th>
+              <th>(n,m)</th>
+              <th>D (Å)</th>
+              <th data-i18n="sample.cavity">Cavidade (Å)</th>
+              <th data-i18n="sample.atoms">Átomos</th>
+              <th>ε (%)</th>
+              <th data-i18n="sample.chir">Quiralidade</th>
+              <th class="col-sp" data-i18n="sample.bonds">Espúrias</th>
+              <th data-i18n="sample.files">Arquivos</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <nav class="cat-pager" aria-label="Páginas da amostra">
+          <button type="button" id="pg-first" data-i18n="sample.first">Primeira</button>
+          <button type="button" id="pg-prev" data-i18n="sample.prev">Anterior</button>
+          <span class="cat-pager__where"><span data-i18n="sample.page">Página</span> <input type="number" id="pg-input" min="1" value="1" aria-label="Página" /> <span data-i18n="sample.of">de</span> <span id="pg-total">—</span></span>
+          <button type="button" id="pg-next" data-i18n="sample.next">Próxima</button>
+          <button type="button" id="pg-last" data-i18n="sample.last">Última</button>
+        </nav>
+      </div>
+    </section>
+  </div>
+
+  <!-- 3. Pedido -->
+  <section class="card cat-request" id="cat-request">
+    <div class="panel-title" data-i18n="req.title">Pedido</div>
+    <p class="cat-lead cat-lead--sm" data-i18n="req.lead"></p>
+    <div class="cat-req-grid">
+      <div class="cat-field">
+        <div class="cat-label" data-i18n="req.formats">Formato</div>
+        <div class="pills" id="f-formats">
+          <button type="button" class="pill is-on" data-v="cif">CIF</button>
+          <button type="button" class="pill" data-v="xyz">XYZ</button>
+          <button type="button" class="pill" data-v="poscar">POSCAR</button>
+          <button type="button" class="pill" data-v="lammps">LAMMPS</button>
+        </div>
+      </div>
+      <div class="cat-field">
+        <label class="cat-label" for="f-vacuum" data-i18n="req.vacuum">Vácuo (Å)</label>
+        <input type="number" id="f-vacuum" min="1" max="50" step="1" value="10" />
+      </div>
+      <div class="cat-field">
+        <label class="cat-label" for="f-per-mat" data-i18n="req.perMat">Máximo por Sistema 2D</label>
+        <input type="number" id="f-per-mat" min="0" max="10000" step="1" value="0" />
+        <span class="cat-hint" data-i18n="req.perMatHint"></span>
+      </div>
+    </div>
+    <div class="cat-req-summary" id="req-summary"></div>
+    <div class="cat-req-form">
+      <div class="cat-field"><label class="cat-label" for="req-name" data-i18n="req.name">Nome</label><input type="text" id="req-name" autocomplete="off" /></div>
+      <div class="cat-field"><label class="cat-label" for="req-email" data-i18n="req.email">E-mail</label><input type="email" id="req-email" autocomplete="off" /></div>
+      <button type="button" class="btn-primary cat-send" id="req-send" data-i18n="req.send">Confirmar pedido</button>
+    </div>
+    <p class="cat-lead cat-lead--sm cat-req-note" data-i18n="req.note"></p>
+    <div class="cat-track" id="cat-track">
+      <div class="cat-label" data-i18n="track.title">Acompanhar um pedido</div>
+      <div class="cat-track__row">
+        <input type="text" id="track-proto" autocomplete="off" aria-label="Protocolo" />
+        <button type="button" class="btn-secondary" id="btn-track" data-i18n="track.check">Consultar</button>
+      </div>
+      <div id="track-out"></div>
+    </div>
+  </section>
+
+  <!-- 4. Como funciona -->
+  <section class="card cat-explain-section" id="cat-explain">
+    <div class="panel-title" data-i18n="ex.title">Como o catálogo funciona</div>
+    <div class="cat-explain" id="cat-explain-grid">
+      <article><h3 data-i18n="ex.src.t"></h3><p data-i18n="ex.src.p"></p></article>
+      <article><h3 data-i18n="ex.nm.t"></h3><p data-i18n="ex.nm.p"></p></article>
+      <article><h3 data-i18n="ex.d.t"></h3><p data-i18n="ex.d.p"></p></article>
+      <article><h3 data-i18n="ex.cell.t"></h3><p data-i18n="ex.cell.p"></p></article>
+      <article><h3 data-i18n="ex.sense.t"></h3><p data-i18n="ex.sense.p"></p></article>
+      <article><h3 data-i18n="ex.bonds.t"></h3><p data-i18n="ex.bonds.p"></p></article>
+      <article><h3 data-i18n="ex.chir.t"></h3><p data-i18n="ex.chir.p"></p></article>
+      <article><h3 data-i18n="ex.req.t"></h3><p data-i18n="ex.req.p"></p></article>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <span>NTBuilder · NanoEng · UnB</span>
+  <span class="sep">|</span>
+  <a href="https://nanoeng.unb.br" target="_blank" rel="noopener">NanoEng</a>
+  <span class="site-footer__spacer"></span>
+  <span data-i18n="footer.cite">Se você usa o catálogo, por favor cite o NTBuilder e as bases de origem.</span>
+</footer>
+
+<div id="fig-overlay" class="modal-overlay">
+  <div class="modal-box modal-box--wide cat-fig">
+    <div class="cat-fig__head">
+      <h2 data-i18n="fig.title">Classes de rede</h2>
+      <button type="button" class="btn-icon" id="fig-close" aria-label="Fechar">×</button>
+    </div>
+    <img id="fig-img" alt="" />
+    <p class="cat-hint" data-i18n="fig.caption"></p>
+  </div>
+</div>
+
+<div id="build-overlay" class="modal-overlay">
+  <div class="modal-box cat-build" role="dialog" aria-modal="true" aria-labelledby="build-title">
+    <h2 id="build-title" data-i18n="build.title">Montando o arquivo</h2>
+    <p class="cat-proto" id="build-proto"></p>
+    <div class="cat-bar cat-bar--big"><div class="cat-bar__fill" id="build-fill"></div></div>
+    <p class="cat-state" id="build-state"></p>
+    <p class="cat-hint" data-i18n="build.note"></p>
+    <div class="cat-build__actions">
+      <a class="btn-primary hidden" id="build-dl" data-i18n="build.again">Baixar de novo</a>
+      <button type="button" class="btn-secondary" id="build-close" data-i18n="build.close">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+<script src="static/catalogue.js?v=20260913d"></script>
+</body>
+</html>
