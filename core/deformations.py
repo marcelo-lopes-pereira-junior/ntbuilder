@@ -16,6 +16,10 @@ apply_torsion(nt, twist_rate)
     Apply a uniform twist φ(z) = twist_rate · z around the tube axis.
     twist_rate in degrees per Å.
 
+torsion_closes(nt, twist_rate, n_rep)
+    True when the total twist over the cell is a rotation symmetry of the
+    untwisted structure, so the twisted cell stays periodic along Z.
+
 apply_radial_strain(nt, strain)  [experimental]
     Uniform radial scaling of (x,y) coordinates — models hydrostatic
     in-plane pressure. Use with caution: does not relax bonds.
@@ -124,11 +128,93 @@ def apply_axial_strain(nt: NanotubeStructure, strain: float) -> NanotubeStructur
 # Torsion (twist)
 # ─────────────────────────────────────────────────────────────────────────────
 
+TORSION_CLOSE_TOL = 0.02   # Å, atom-matching tolerance of torsion_closes
+
+
+def torsion_closes(
+    nt:         NanotubeStructure,
+    twist_rate: float,
+    n_rep:      int   = 1,
+    tol:        float = TORSION_CLOSE_TOL,
+) -> bool:
+    """
+    Return True when a uniform twist keeps the structure periodic along Z.
+
+    ``apply_torsion`` rotates the atom at height z by φ(z) = twist_rate · z
+    about the atomic XY centroid.  The image of that atom one period higher,
+    at z + L, is rotated by φ(z) + Φ with Φ = twist_rate · L.  The twisted
+    cell therefore joins itself across the Z boundary exactly when the
+    rotation R(Φ) about the same axis maps the *untwisted* periodic structure
+    onto itself: Φ must be a rotation symmetry of the structure (a multiple
+    of 360°/g for a single tube of rotational order g, of lcm(60°, 360°/g)
+    for a hexagonal bundle, and so on).
+
+    The test is numerical: every atom rotated by Φ, wrapped into the cell
+    along Z, must have an atom of the same species within ``tol`` Å
+    (cKDTree, periodic images across the Z boundary included).  An isometry
+    that sends each atom within ``tol`` of a distinct partner is a bijection
+    whenever ``tol`` is below half the shortest interatomic distance.
+
+    Parameters
+    ----------
+    nt          : untwisted structure, periodic along Z with period box[2].
+    twist_rate  : rotation rate in degrees per Å.
+    n_rep       : number of unit cells the twist spans (the same ``n_rep``
+                  passed to ``apply_torsion``), so L = n_rep · box[2].
+    tol         : matching tolerance in Å.
+    """
+    from scipy.spatial import cKDTree
+
+    n_atoms = nt.coords.shape[0]
+    if abs(twist_rate) < 1e-12 or n_atoms == 0:
+        return True
+
+    Lz_cell = float(nt.box[2])
+    if Lz_cell <= 0.0:
+        return False
+    phi = twist_rate * Lz_cell * max(1, int(n_rep))      # degrees
+
+    cx, cy = _xy_centroid(nt)
+    dx = nt.coords[:, 0] - cx
+    dy = nt.coords[:, 1] - cy
+    r_max = float(np.sqrt(dx * dx + dy * dy).max())
+
+    # Φ ≡ 0 (mod 360°): the identity, periodic for any structure.  The
+    # residual angle moves the outermost atom by at most r_max · |Δφ|.
+    residual = (phi + 180.0) % 360.0 - 180.0
+    if abs(math.radians(residual)) * r_max <= tol:
+        return True
+
+    ref = nt.coords.copy()
+    ref[:, 2] %= Lz_cell
+    symbols = np.asarray(nt.symbols)
+
+    # Periodic images of the atoms that sit within tol of either Z face.
+    lo = ref[:, 2] < tol
+    hi = ref[:, 2] > Lz_cell - tol
+    img_idx = np.concatenate([np.arange(n_atoms), np.flatnonzero(lo),
+                              np.flatnonzero(hi)])
+    img = np.vstack([ref, ref[lo] + [0.0, 0.0, Lz_cell],
+                     ref[hi] - [0.0, 0.0, Lz_cell]])
+
+    c, s = math.cos(math.radians(phi)), math.sin(math.radians(phi))
+    rot = np.empty_like(ref)
+    rot[:, 0] = cx + c * dx - s * dy
+    rot[:, 1] = cy + s * dx + c * dy
+    rot[:, 2] = ref[:, 2]
+
+    dist, j = cKDTree(img).query(rot, distance_upper_bound=tol)
+    if not np.all(np.isfinite(dist)):
+        return False
+    return bool(np.all(symbols[img_idx[j]] == symbols))
+
+
 def apply_torsion(
     nt:        NanotubeStructure,
     twist_rate: float,
     z_vacuum:   float | None = None,
     n_rep:      int = 1,
+    closes:     bool | None = None,
 ) -> NanotubeStructure:
     """
     Apply a uniform helical twist φ(z) = twist_rate × z to the nanotube.
@@ -139,33 +225,44 @@ def apply_torsion(
     bundles correctly, where the box centre and the actual centre of the
     atomic distribution differ.
 
-    Atomic z-coordinates are unchanged; the simulation box keeps its XY
-    extent but the **axial (Z) periodicity is broken** by the twist —
-    the structure ceases to be commensurate along Z, and applying
-    periodic boundary conditions would join an end at angle 0 to an end
-    at angle ``twist_rate × L_z``.  To support PBC-aware simulations we
-    add a vacuum slab along Z.
+    Atomic z-coordinates are unchanged.  The total angle over the twisted
+    length L is Φ = twist_rate × L.  When Φ is a rotation symmetry of the
+    untwisted structure about the twist axis (see ``torsion_closes``) the
+    twisted cell joins itself across the Z boundary and stays periodic, so
+    the Z box is kept.  Otherwise the **axial (Z) periodicity is broken** —
+    periodic boundary conditions would join an end at angle 0 to an end at
+    angle Φ — and a vacuum slab is added along Z.
 
     Parameters
     ----------
     nt          : source NanotubeStructure.
     twist_rate  : rotation rate in degrees per Å.  Positive → right-hand
                   (conventional) twist.
-    z_vacuum    : Z padding added to the simulation box, in Å.  When
-                  ``None`` the function uses ``nt.vacuum`` (the same
-                  lateral vacuum used during the radial build).  Set to
-                  ``0`` to keep the original Z box length.
+    z_vacuum    : Z padding added to each end of the simulation box, in Å.
+                  When ``None`` the function keeps the Z box if the twist
+                  closes the cell and otherwise uses ``nt.vacuum`` (the
+                  same lateral vacuum used during the radial build).  An
+                  explicit value is always honoured; ``0`` keeps the
+                  original Z box length.
     n_rep       : tile the input ``n_rep`` times along Z **before**
                   applying the twist.  Useful when the user has set
                   ``Reps > 1`` in the viewer and expects the torsion to
                   act on the supercell that they see, not on a single
                   unit cell.  Default 1 = no replication.
+    closes      : result of ``torsion_closes(nt, twist_rate, n_rep)`` when
+                  the caller has already computed it; ``None`` computes it
+                  if needed (only when ``z_vacuum`` is ``None``).
 
     Returns
     -------
     New NanotubeStructure with twisted XY coordinates and a Z box
     extended by ``2·z_vacuum``.
     """
+    if z_vacuum is None:
+        if closes is None:
+            closes = torsion_closes(nt, twist_rate, n_rep=n_rep)
+        z_vacuum = 0.0 if closes else float(nt.vacuum)
+
     # ── Optional pre-replication along Z ────────────────────────────────────
     if n_rep > 1:
         nt = replicate_z(nt, n_rep)
@@ -185,8 +282,6 @@ def apply_torsion(
     coords[:, 1] = cy + sin_phi * dx + cos_phi * dy
 
     new_box = nt.box.copy()
-    if z_vacuum is None:
-        z_vacuum = float(nt.vacuum)
     if z_vacuum > 0.0:
         # Pad symmetrically along Z and re-centre the atoms in the new box.
         new_box[2] = float(nt.box[2]) + 2.0 * float(z_vacuum)
@@ -197,20 +292,41 @@ def apply_torsion(
 
 
 def torsion_warning(twist_rate: float, z_vacuum: float,
-                    n_rep: int = 1) -> str | None:
+                    n_rep: int = 1, closes: bool = False,
+                    total_angle: float | None = None) -> str | None:
     """
-    Return a short user-facing warning describing the consequence of
+    Return a short user-facing message describing the consequence of
     applying torsion on a periodic structure, or ``None`` when no torsion
     is applied.
 
+    With ``closes=True`` (see ``torsion_closes``) the message says that the
+    twisted cell stays periodic along Z; ``total_angle`` (degrees), when
+    given, is quoted.  Otherwise it warns about the loss of axial
+    periodicity and the vacuum slab.
+
     Mentions ``n_rep`` when the torsion was applied to a multi-cell
     supercell so the user is aware that the displayed Reps were absorbed
-    into the geometry — the resulting structure is *no longer* a
-    periodic unit cell and the Reps spinbox should be hidden until the
-    torsion is undone.
+    into the geometry.  For a non-closing twist the resulting structure is
+    *no longer* a periodic unit cell and the Reps spinbox should be hidden
+    until the torsion is undone.
     """
     if abs(twist_rate) < 1e-9:
         return None
+    if closes:
+        angle = (f" turns the cell by {total_angle:.2f}° along its length, a "
+                 f"rotation symmetry of the untwisted structure, so it"
+                 if total_angle is not None else "")
+        parts = [
+            f"Torsion of {twist_rate:+.4f} °/Å{angle} closes the cell: the "
+            f"twisted cell stays periodic along Z."
+        ]
+        if n_rep > 1:
+            parts.append(
+                f"The twist was applied to the supercell of {n_rep} unit "
+                f"cells that you had on screen, which is now the periodic "
+                f"cell; Reps replicates it."
+            )
+        return "  ".join(parts)
     parts = [
         f"Torsion of {twist_rate:+.4f} °/Å breaks the axial periodicity of "
         f"the nanotube — the structure is no longer commensurate along Z."

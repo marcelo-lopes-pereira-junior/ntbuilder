@@ -234,7 +234,7 @@ def build_bundle(
 GEOMETRIES = list(_GEOMETRY_OFFSETS.keys()) + ["grid"]
 
 GEOMETRY_LABELS = {
-    "linear":     "Linear (2 tubes)",
+    "linear":     "Double (2 tubes)",
     "triangle":   "Triangle (3 tubes)",
     "square4":    "Square 2×2 (4 tubes)",
     "hexagonal7": "Hexagonal (7 tubes)",

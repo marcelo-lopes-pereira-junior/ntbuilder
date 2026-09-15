@@ -428,7 +428,7 @@ class BundleDialog(QDialog):
     """Configure nanotube bundle geometry."""
 
     _LABELS = {
-        "linear":     "Linear (2 tubes along X)",
+        "linear":     "Double (2 tubes along X)",
         "triangle":   "Equilateral triangle (3 tubes)",
         "square4":    "Square 2×2 (4 tubes)",
         "hexagonal7": "Hexagonal — 1+6 (7 tubes)",
@@ -597,8 +597,9 @@ class DeformDialog(QDialog):
         self._spin_zvac.setEnabled(False)   # enabled when twist != 0
         self._spin_zvac.setToolTip(
             "Vacuum padding added to each end of the simulation box along\n"
-            "the tube axis (Z).  Required when torsion is applied because\n"
-            "the twist breaks axial periodicity."
+            "the tube axis (Z) when the twist breaks axial periodicity.\n"
+            "Not added when the total twist over the cell is a rotation\n"
+            "symmetry of the structure: the twisted cell stays periodic."
         )
         form.addRow("Z vacuum (torsion):", self._spin_zvac)
 
@@ -629,9 +630,12 @@ class DeformDialog(QDialog):
     def _update_note(self):
         if abs(self._spin_twist.value()) > 1e-9:
             self._note.setText(
-                "<b>ℹ Torsion breaks axial periodicity.</b>  A vacuum slab "
-                "will be added along Z so the twisted segment is treated "
-                "as a finite cluster in periodic codes."
+                "<b>ℹ Torsion usually breaks axial periodicity.</b>  A vacuum "
+                "slab will be added along Z so the twisted segment is treated "
+                "as a finite cluster in periodic codes.  When the total twist "
+                "over the cell is a rotation symmetry of the structure (e.g. "
+                "60° for a (6,6) tube) the twisted cell stays periodic along Z "
+                "and no vacuum is added."
             )
         else:
             self._note.setText(

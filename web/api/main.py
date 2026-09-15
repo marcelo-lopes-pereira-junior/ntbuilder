@@ -1090,7 +1090,7 @@ async def deform(req: DeformRequest):
     """Apply axial strain, torsion and / or radial strain to a nanotube."""
     from core.deformations import (
         apply_axial_strain, apply_torsion, apply_radial_strain,
-        deformation_description, torsion_warning,
+        deformation_description, torsion_closes, torsion_warning,
     )
 
     timer = _timer()
@@ -1130,11 +1130,19 @@ async def deform(req: DeformRequest):
         if req.n_repeat > 1:
             nt = _replicate_z(nt, req.n_repeat)
 
+    closes = False
+    total_angle = None
     try:
         if abs(req.axial_strain) > 1e-9:
             nt = apply_axial_strain(nt, req.axial_strain)
         if abs(req.twist_rate) > 1e-9:
-            nt = apply_torsion(nt, req.twist_rate, z_vacuum=req.z_vacuum)
+            # The replicated supercell is the twisted length.  A total angle
+            # that is a rotation symmetry keeps it periodic: no Z vacuum.
+            closes = torsion_closes(nt, req.twist_rate)
+            total_angle = req.twist_rate * float(nt.box[2])
+            nt = apply_torsion(nt, req.twist_rate,
+                               z_vacuum=None if closes else req.z_vacuum,
+                               closes=closes)
         if abs(req.radial_strain) > 1e-9:
             nt = apply_radial_strain(nt, req.radial_strain)
     except Exception as exc:
@@ -1157,7 +1165,9 @@ async def deform(req: DeformRequest):
             twist_rate=req.twist_rate,
             radial_strain=req.radial_strain,
         ),
-        "warning":     torsion_warning(req.twist_rate, req.z_vacuum),
+        "warning":     torsion_warning(req.twist_rate, req.z_vacuum,
+                                       closes=closes, total_angle=total_angle),
+        "torsion_periodic": bool(closes),
         "n_atoms":     nt.n_atoms,
         "box":         [float(x) for x in nt.box],
     }

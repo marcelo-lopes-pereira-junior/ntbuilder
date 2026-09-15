@@ -123,7 +123,8 @@ class DeformRequest(BaseModel):
     radial_strain: float        = Field(0.0,  ge=-0.5, le=1.0)
     vacuum:       float         = Field(10.0, ge=1.0,  le=50.0)
     z_vacuum:     float         = Field(10.0, ge=0.0,  le=100.0,
-        description="Z padding added when torsion ≠ 0.")
+        description="Z padding added when a torsion breaks Z periodicity "
+                    "(ignored when the twist closes the cell).")
     n_repeat:     int           = Field(1,    ge=1,    le=999)
 
     @model_validator(mode="after")

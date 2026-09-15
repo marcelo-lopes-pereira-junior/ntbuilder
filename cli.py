@@ -142,7 +142,7 @@ def cmd_mwnt(args):
 
 def cmd_deform(args):
     """Apply deformations (strain, torsion) to an existing structure file."""
-    from core.deformations import apply_axial_strain, apply_torsion
+    from core.deformations import apply_axial_strain, apply_torsion, torsion_closes
     from core.io import load_structure
 
     # Load the nanotube from file — must be xyz or similar
@@ -181,8 +181,11 @@ def cmd_deform(args):
         nt = apply_axial_strain(nt, args.strain)
         print(f"Applied axial strain {args.strain*100:+.2f}%")
     if args.twist != 0.0:
-        nt = apply_torsion(nt, args.twist)
-        print(f"Applied torsion {args.twist:+.4f} °/Å")
+        closes = torsion_closes(nt, args.twist)
+        nt = apply_torsion(nt, args.twist, closes=closes)
+        print(f"Applied torsion {args.twist:+.4f} °/Å"
+              + ("  (closes the cell: periodic along Z)" if closes
+                 else "  (breaks Z periodicity: vacuum added along Z)"))
 
     _export(nt, args.output)
 

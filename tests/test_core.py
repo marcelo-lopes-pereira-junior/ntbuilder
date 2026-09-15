@@ -1036,7 +1036,7 @@ class TestConnectivity:
         assert cols.shape[0] == 0
 
     def test_get_radius_known_elements(self):
-        """Alvarez covalent radii for common elements."""
+        """Cordero et al. (2008) covalent radii for common elements."""
         assert abs(get_radius("C")  - 0.76) < 0.01
         assert abs(get_radius("N")  - 0.71) < 0.01
         assert abs(get_radius("B")  - 0.84) < 0.01
@@ -1296,3 +1296,95 @@ class TestMWNTSpacing:
         for w_in, w_out in zip(res.walls, res.walls[1:]):
             gap = (w_out.diameter - w_in.diameter) / 2 - 6.0
             assert abs(gap - 3.4) <= step / 2 + 1e-9
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. TestTorsionCloses — a twist by a rotation symmetry keeps Z periodicity
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTorsionCloses:
+
+    @staticmethod
+    @pytest.fixture(scope="class")
+    def tube66():
+        cif = Path(__file__).resolve().parents[1] / "examples" / "Graphene.cif"
+        s = read_cif(cif)
+        return build_nanotube(s, compute_chirality(6, 6, s), vacuum=10.0)
+
+    @staticmethod
+    def _periodic_nn(nt, k=3):
+        """Distances to the k nearest neighbours, periodic images along z."""
+        from scipy.spatial import cKDTree
+        X, Lz = nt.coords, nt.box[2]
+        aug = np.vstack([X + [0, 0, j * Lz] for j in (-1, 0, 1)])
+        return cKDTree(aug).query(X, k=k + 1)[0][:, 1:]
+
+    @staticmethod
+    def _cross_min(nt):
+        """Smallest distance between the cell and its copy shifted by +Lz."""
+        from scipy.spatial import cKDTree
+        X = nt.coords
+        return cKDTree(X).query(X + [0, 0, nt.box[2]])[0].min()
+
+    def test_rotation_symmetries_close(self, tube66):
+        from core.deformations import torsion_closes
+        L = tube66.box[2]
+        for n_rep in (1, 20):
+            for angle in (60.0, 120.0, 360.0, -60.0):
+                assert torsion_closes(tube66, angle / (n_rep * L), n_rep=n_rep)
+            for angle in (30.0, 45.0, 17.0, 61.0):
+                assert not torsion_closes(tube66, angle / (n_rep * L), n_rep=n_rep)
+
+    def test_closing_twist_is_periodic(self, tube66):
+        from core.deformations import apply_torsion
+        L, n_rep = tube66.box[2], 20
+        tw = apply_torsion(tube66, 60.0 / (n_rep * L), n_rep=n_rep)
+        assert tw.n_atoms == 24 * n_rep
+        assert tw.box[2] == pytest.approx(n_rep * L)          # no vacuum
+        nn = self._periodic_nn(tw)
+        # The shear spreads the bonds over 1.37-1.48 A; every atom keeps 3.
+        assert nn.min() > 1.35 and nn.max() < 1.50
+        X = tw.coords
+        from scipy.spatial import cKDTree
+        intra = cKDTree(X).query(X, k=2)[0][:, 1].min()
+        cross = self._cross_min(tw)
+        assert 1.35 < cross < 1.45
+        assert cross == pytest.approx(intra, abs=1e-6)
+
+    def test_non_closing_twist_breaks_periodicity(self, tube66):
+        from core.deformations import apply_torsion, torsion_closes
+        L, n_rep = tube66.box[2], 20
+        rate = 30.0 / (n_rep * L)
+        assert not torsion_closes(tube66, rate, n_rep=n_rep)
+        tw = apply_torsion(tube66, rate, n_rep=n_rep)
+        assert tw.box[2] == pytest.approx(n_rep * L + 2 * tube66.vacuum)
+        bare = apply_torsion(tube66, rate, z_vacuum=0.0, n_rep=n_rep)
+        from scipy.spatial import cKDTree
+        X = bare.coords
+        intra = cKDTree(X).query(X, k=2)[0][:, 1].min()
+        # The seam joins angle 0 to angle 30 deg: a 1.23 A contact, 0.16 A
+        # shorter than any bond inside the cell.
+        assert self._cross_min(bare) < intra - 0.1
+
+    def test_explicit_vacuum_is_honoured(self, tube66):
+        from core.deformations import apply_torsion
+        L = tube66.box[2]
+        tw = apply_torsion(tube66, 60.0 / (4 * L), z_vacuum=5.0, n_rep=4)
+        assert tw.box[2] == pytest.approx(4 * L + 10.0)
+
+    def test_hexagonal_bundle_closes_at_60(self, tube66):
+        from core.bundles import build_bundle
+        from core.deformations import torsion_closes
+        b = build_bundle(tube66, "hexagonal7", spacing=3.4, vacuum=10.0).nanotube
+        L = b.box[2]
+        assert torsion_closes(b, 60.0 / (10 * L), n_rep=10)
+        assert not torsion_closes(b, 30.0 / (10 * L), n_rep=10)
+
+    def test_warning_text(self):
+        from core.deformations import torsion_warning
+        assert torsion_warning(0.0, 10.0) is None
+        broken = torsion_warning(0.5, 10.0)
+        assert "breaks the axial periodicity" in broken and "vacuum" in broken
+        ok = torsion_warning(0.5, 10.0, n_rep=20, closes=True, total_angle=60.0)
+        assert "stays periodic along Z" in ok and "60.00°" in ok
+        assert "vacuum" not in ok and "breaks" not in ok

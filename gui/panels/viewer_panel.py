@@ -171,7 +171,7 @@ class ViewerPanel(QWidget):
         btn_bonds.setFixedHeight(28)              # align with the spinboxes
         btn_bonds.setToolTip(
             "Edit per-species bond length cutoffs.\n"
-            "Defaults use covalent radii from Alvarez (2008) × 1.20."
+            "Defaults use covalent radii from Cordero et al. (2008), DOI 10.1039/b801115j, × 1.20."
         )
         btn_bonds.clicked.connect(self._on_bond_cutoffs)
         row2.addWidget(btn_bonds)
@@ -400,7 +400,9 @@ class ViewerPanel(QWidget):
                   to keep the previous raw reference intact.
         kind    : transformation label to associate with this state — one
                   of ``"raw"`` (freshly built SWNT), ``"mwnt"``,
-                  ``"bundle"``, ``"strain"``, ``"torsion"``.  Used by the
+                  ``"bundle"``, ``"strain"``, ``"torsion"`` (twist that
+                  breaks Z periodicity) or ``"torsion_periodic"`` (twist
+                  that closes the cell, Reps stays available).  Used by the
                   operation-chaining warnings (e.g. MWNT-after-bundle).
                   Defaults to ``"raw"`` for is_raw=True calls and inherits
                   the previous kind otherwise.
@@ -595,7 +597,10 @@ class ViewerPanel(QWidget):
         Returns True when the user wants to proceed (also when there is no
         warning for this combination).
         """
-        msg = self._CHAIN_WARNINGS.get((next_op, self._transform_kind))
+        kind = self._transform_kind
+        if kind == "torsion_periodic":
+            kind = "torsion"
+        msg = self._CHAIN_WARNINGS.get((next_op, kind))
         if msg is None:
             return True
         if extra:
@@ -651,36 +656,46 @@ class ViewerPanel(QWidget):
 
         try:
             from core.deformations import (
-                apply_axial_strain, apply_torsion, torsion_warning,
+                apply_axial_strain, apply_torsion, torsion_closes,
+                torsion_warning,
             )
             nt = self._nanotube   # "what you see is what you get"
             applied_kind = self._transform_kind
             if abs(dlg.axial_strain) > 1e-9:
                 nt = apply_axial_strain(nt, dlg.axial_strain)
                 applied_kind = "strain"
+            closes = False
+            total_angle = None
             if applies_torsion:
+                # A twist whose total angle over the Reps supercell is a
+                # rotation symmetry of the structure keeps it periodic along
+                # Z: no vacuum slab, and Reps keeps its meaning.
+                closes = torsion_closes(nt, dlg.twist_rate, n_rep=n_rep_view)
+                total_angle = dlg.twist_rate * float(nt.box[2]) * max(1, n_rep_view)
                 nt = apply_torsion(
                     nt, dlg.twist_rate,
-                    z_vacuum = dlg.z_vacuum,
+                    z_vacuum = None if closes else dlg.z_vacuum,
                     n_rep    = n_rep_view,
+                    closes   = closes,
                 )
-                applied_kind = "torsion"
+                applied_kind = "torsion_periodic" if closes else "torsion"
 
-                # Once a torsion is applied, the structure is no longer a
-                # periodic unit cell — the Reps control has no meaning.
-                # Reset it to 1 and hide it.  It will be restored by undo
-                # when the user steps back to a periodic state.
+                # The displayed Reps were absorbed into the twisted geometry,
+                # so reset the spinbox to 1.  A non-closing twist leaves no
+                # periodic unit cell, so Reps is also hidden; undo restores
+                # it when the user steps back to a periodic state.
                 self._spin_rep.blockSignals(True)
                 self._spin_rep.setValue(1)
                 self._spin_rep.blockSignals(False)
-                self._set_reps_visible(False)
+                self._set_reps_visible(closes)
 
             self.set_nanotube(nt, is_raw=False, kind=applied_kind)
 
-            # Inform the user when torsion was applied, so the loss of
-            # axial periodicity is explicit rather than implicit.
+            # Inform the user when torsion was applied, so whether the axial
+            # periodicity survived is explicit rather than implicit.
             warn = torsion_warning(
                 dlg.twist_rate, dlg.z_vacuum, n_rep=n_rep_view,
+                closes=closes, total_angle=total_angle,
             )
             if warn is not None:
                 QMessageBox.information(self, "Torsion applied", warn)
@@ -690,8 +705,8 @@ class ViewerPanel(QWidget):
     def _set_reps_visible(self, visible: bool) -> None:
         """Show or hide the Reps spinbox and its label.
 
-        Used to hide Reps after a torsion (the structure is no longer a
-        periodic unit cell) and restore it when undo brings us back to
+        Used to hide Reps after a torsion that breaks Z periodicity (the
+        structure is no longer a periodic unit cell) and restore it when undo brings us back to
         a periodic state.
         """
         self._lbl_reps.setVisible(visible)

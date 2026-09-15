@@ -139,7 +139,7 @@ const I18N = {
     "bundle.title": "⬡ Feixe de nanotubos",
     "bundle.desc":  "Replica o nanotubo atual em uma rede 2D formando uma supercélula periódica em bundle. Funciona sobre qualquer estrutura previamente construída (SWNT, MWNT ou deformada).",
     "bundle.geom": "Geometria",
-    "bundle.linear": "Linear (2 tubos)",
+    "bundle.linear": "Duplo (2 tubos)",
     "bundle.triangle": "Triângulo (3 tubos)",
     "bundle.square4":  "Quadrado 2×2 (4 tubos)",
     "bundle.hex7":     "Hexagonal 1+6 (7 tubos)",
@@ -150,7 +150,7 @@ const I18N = {
     "bundle.go": "Construir feixe", "bundle.going": "Construindo…",
 
     "deform.title": "↔ Deformação / Torção",
-    "deform.desc":  "Aplica strain axial, strain radial e/ou torção ao nanotubo atual. A torção quebra a periodicidade axial: o resultado é um segmento finito em Z. A torção é aplicada sobre a supercélula que você está visualizando (controle ×z no cabeçalho do visualizador 3D). Para mudar o comprimento, feche este diálogo, ajuste o ×z e reabra.",
+    "deform.desc":  "Aplica strain axial, strain radial e/ou torção ao nanotubo atual. A torção costuma quebrar a periodicidade axial: o resultado é um segmento finito em Z, com vácuo. Quando o ângulo total da torção ao longo da célula é uma rotação de simetria da estrutura (por exemplo 60° num tubo (6,6)), a célula torcida continua periódica em Z e nenhum vácuo é adicionado. A torção é aplicada sobre a supercélula que você está visualizando (controle ×z no cabeçalho do visualizador 3D). Para mudar o comprimento, feche este diálogo, ajuste o ×z e reabra.",
     "deform.strain":   "Strain axial (%)",
     "deform.twist":    "Taxa de torção (°/Å)",
     "deform.radial":   "Strain radial (%)",
@@ -361,7 +361,7 @@ const I18N = {
     "bundle.title": "⬡ Nanotube bundle",
     "bundle.desc":  "Replicate the current nanotube on a 2D lattice to form a periodic bundle supercell. Works on top of any previously built structure (SWNT, MWNT or deformed tube).",
     "bundle.geom": "Geometry",
-    "bundle.linear": "Linear (2 tubes)",
+    "bundle.linear": "Double (2 tubes)",
     "bundle.triangle": "Triangle (3 tubes)",
     "bundle.square4":  "Square 2×2 (4 tubes)",
     "bundle.hex7":     "Hexagonal 1+6 (7 tubes)",
@@ -372,7 +372,7 @@ const I18N = {
     "bundle.go": "Build bundle", "bundle.going": "Building…",
 
     "deform.title": "↔ Deform / Torsion",
-    "deform.desc":  "Apply axial strain, radial strain and / or torsion to the current nanotube. Torsion breaks axial periodicity: the result is a finite Z segment. The twist is applied to the supercell currently being shown (×z control in the 3D viewer header). To change the length, close this dialog, adjust ×z and reopen.",
+    "deform.desc":  "Apply axial strain, radial strain and / or torsion to the current nanotube. Torsion usually breaks axial periodicity: the result is a finite Z segment with vacuum. When the total twist angle over the cell is a rotation symmetry of the structure (e.g. 60° for a (6,6) tube), the twisted cell stays periodic along Z and no vacuum is added. The twist is applied to the supercell currently being shown (×z control in the 3D viewer header). To change the length, close this dialog, adjust ×z and reopen.",
     "deform.strain":   "Axial strain (%)",
     "deform.twist":    "Torsion rate (°/Å)",
     "deform.radial":   "Radial strain (%)",
@@ -1984,9 +1984,12 @@ $("deform-build-btn").addEventListener("click", async () => {
       onSuccess: (r) => {
         state.kind = (Math.abs(twist) > 1e-9) ? "torsion"
                    : (Math.abs(strainPct) > 1e-9 ? "axial" : "radial");
-        state.torsionApplied = (Math.abs(twist) > 1e-9);
+        // A twist that closes the cell (total angle = rotation symmetry)
+        // keeps Z periodicity, so Reps and ×z stay available.
+        state.torsionApplied = (Math.abs(twist) > 1e-9) && !r.torsion_periodic;
         state.walls   = null;
-        state.warning = r.warning || null;
+        // A periodic twist returns an informational note, not a warning.
+        state.warning = r.torsion_periodic ? null : (r.warning || null);
         state.deformDesc = r.description || null;
         state.atomsBase = r.n_atoms;
         state.summary = {
@@ -2005,6 +2008,11 @@ $("deform-build-btn").addEventListener("click", async () => {
           const vrz = $("view-rep-z");
           vrz.value = 1; vrz.disabled = true;
           vrz.title = t("viewer.repz.locked");
+        } else if (Math.abs(twist) > 1e-9) {
+          // Periodic twist: the backend already baked the ×z supercell into
+          // the new cell, so reset ×z to 1 (unlocked) to avoid replicating
+          // it twice.
+          $("view-rep-z").value = 1;
         }
         const msgs = [];
         if (r.description && r.description !== "none") msgs.push(`${t("t.deformApplied")}: ${r.description}`);
@@ -2012,7 +2020,7 @@ $("deform-build-btn").addEventListener("click", async () => {
         if (msgs.length) {
           $("deform-warning").textContent = msgs.join("\n\n");
           $("deform-warning").classList.remove("hidden");
-          if (r.warning) $("deform-warning").classList.add("warning");
+          if (r.warning && !r.torsion_periodic) $("deform-warning").classList.add("warning");
         }
       },
     });
