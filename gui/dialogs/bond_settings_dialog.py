@@ -12,7 +12,7 @@ Layout
 The "Custom max" and "Custom min" cells are double-spinboxes.
 If left at 0.00 they mean "not set" (use the default formula).
 
-Reference: Alvarez (2008) Dalton Trans. 2832–2838. DOI 10.1039/b801115j
+Reference: Cordero et al. (2008) Dalton Trans. 2832–2838. DOI 10.1039/b801115j
 Default tolerance: 1.20  (same as VESTA, Mercury, ASE)
 """
 
@@ -116,7 +116,7 @@ class BondSettingsDialog(QDialog):
 
         # ── Reference note ────────────────────────────────────────────────
         lbl_ref = QLabel(
-            "Covalent radii: Alvarez (2008) "
+            "Covalent radii: Cordero et al. (2008) "
             "<i>Dalton Trans.</i> 2832–2838. "
             "DOI: <tt>10.1039/b801115j</tt>"
         )

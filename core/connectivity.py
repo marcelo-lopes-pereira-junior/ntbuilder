@@ -6,7 +6,7 @@ Bond detection from atomic positions using the covalent-radius criterion.
 Two atoms A and B are considered bonded when:
     dist(A, B)  <  (r_cov(A) + r_cov(B)) × tolerance
 
-Reference radii: Alvarez (2008), DOI 10.1039/b801115j
+Reference radii: Cordero et al. (2008), Dalton Trans. 2832–2838, DOI 10.1039/b801115j
 Default tolerance: 1.20  (standard in VESTA, Mercury, ASE)
 
 The module uses scipy.spatial.cKDTree for O(N log N) neighbour search,
@@ -19,7 +19,9 @@ from dataclasses import dataclass, field as dc_field
 
 import numpy as np
 
-# ── Covalent radii (Å) — Alvarez 2008 ────────────────────────────────────────
+# ── Covalent radii (Å) — Cordero et al. (2008), DOI 10.1039/b801115j ─────────
+# Z = 1-96 as tabulated in the paper (the values ASE's covalent_radii also
+# takes from it).  Mn, Fe and Co use the high-spin radii.
 COVALENT_RADII: dict[str, float] = {
     "H":  0.31, "He": 0.28,
     "Li": 1.28, "Be": 0.96, "B":  0.84, "C":  0.76, "N":  0.71,
@@ -35,9 +37,14 @@ COVALENT_RADII: dict[str, float] = {
     "Ag": 1.45, "Cd": 1.44, "In": 1.42, "Sn": 1.39, "Sb": 1.39,
     "Te": 1.38, "I":  1.39, "Xe": 1.40,
     "Cs": 2.44, "Ba": 2.15, "La": 2.07, "Ce": 2.04, "Pr": 2.03,
+    "Nd": 2.01, "Pm": 1.99, "Sm": 1.98, "Eu": 1.98, "Gd": 1.96,
+    "Tb": 1.94, "Dy": 1.92, "Ho": 1.92, "Er": 1.89, "Tm": 1.90,
+    "Yb": 1.87, "Lu": 1.87,
     "Hf": 1.75, "Ta": 1.70, "W":  1.62, "Re": 1.51, "Os": 1.44,
     "Ir": 1.41, "Pt": 1.36, "Au": 1.36, "Hg": 1.32, "Tl": 1.45,
-    "Pb": 1.46, "Bi": 1.48,
+    "Pb": 1.46, "Bi": 1.48, "Po": 1.40, "At": 1.50, "Rn": 1.50,
+    "Fr": 2.60, "Ra": 2.21, "Ac": 2.15, "Th": 2.06, "Pa": 2.00,
+    "U":  1.96, "Np": 1.90, "Pu": 1.87, "Am": 1.80, "Cm": 1.69,
 }
 _R_DEFAULT = 0.90   # fallback for unknown elements
 
@@ -57,8 +64,9 @@ class BondSettings:
 
     Default radii source
     --------------------
-    Alvarez, S. (2008) "Dalton Transactions", 2832–2838.
-    DOI: 10.1039/b801115j
+    Cordero, B., Gómez, V., Platero-Prats, A. E., Revés, M., Echeverría, J.,
+    Cremades, E., Barragán, F. and Alvarez, S. (2008) "Covalent radii
+    revisited", Dalton Trans., 2832–2838.  DOI: 10.1039/b801115j
     Default tolerance factor: 1.20 (same as VESTA / Mercury / ASE).
 
     Custom cutoffs
@@ -78,7 +86,7 @@ class BondSettings:
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def default_max(self, sym_a: str, sym_b: str) -> float:
-        """Default max distance using Alvarez 2008 + tolerance factor."""
+        """Default max distance using Cordero et al. (2008) radii + tolerance factor."""
         return (get_radius(sym_a) + get_radius(sym_b)) * self.tolerance
 
     def max_dist(self, sym_a: str, sym_b: str) -> float:
